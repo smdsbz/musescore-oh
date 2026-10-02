@@ -1,0 +1,15 @@
+# GNU Freefont License Notice (FreeSerif / FreeSans)
+
+FreeSerif.ttf, FreeSerifBold.ttf, FreeSerifItalic.ttf, FreeSerifBoldItalic.ttf
+and FreeSans.ttf are part of the GNU FreeFont project.
+
+Copyright (C) 2002-2012 Free Software Foundation, Inc.
+
+These fonts are free software: you can redistribute them and/or modify
+them under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version, with the Font Embedding Exception.
+
+The full text of the GNU GPL is available in GPL-3.0_FULL_TEXT.txt.
+
+Source: https://www.gnu.org/software/freefont/

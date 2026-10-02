@@ -1,0 +1,12 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "MuseScore OH entry module",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {
+    "libmsoh.so": "file:./src/main/cpp/types/libmsoh",
+    "libmsohengine.so": "file:./src/main/cpp-engine/types/libmsohengine"
+  }
+}

@@ -1,0 +1,143 @@
+GNU GENERAL PUBLIC LICENSE
+Version 3, 29 June 2007
+
+Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+
+Everyone is permitted to copy and distribute verbatim copies of this license
+document, but changing it is not allowed.
+
+MuseScore OH is licensed under the GNU General Public License version 3 (GPL-3.0-only).
+
+Copyright (C) 2026 MuseScore OH contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+================================================================================
+ HOW TO OBTAIN SOURCE CODE (GPL-3.0 Section 6)
+================================================================================
+
+The complete source code for MuseScore OH, including:
+
+  - All ArkTS/ArkUI application code (entry/src/main/ets/)
+  - All native C++ code (entry/src/main/cpp-engine/)
+  - All CMake build scripts and toolchain configuration
+  - All rcc-generated resource files (entry/src/main/cpp-engine/generated/)
+  - Instructions for rebuilding the complete application
+
+is available at the project repository.
+
+The application incorporates source code from MuseScore Studio
+(https://github.com/musescore/MuseScore), also licensed under GPL-3.0,
+and the Muse Framework (https://github.com/musescore/muse_framework),
+also licensed under GPL-3.0.
+
+================================================================================
+ FONT EMBEDDING EXCEPTION
+================================================================================
+
+All fonts included in MuseScore OH (compiled into libmsohengine.so as Qt
+resources) are made available under the SIL Open Font License or the
+GNU Freefont License, and are covered by the following special exception:
+
+- If you create a document which uses fonts included in MuseScore OH,
+and embed this font or unaltered portions of this font into the document,
+then this font does not by itself cause the resulting document to be
+covered by the GNU General Public License. This exception does not
+however invalidate any other reasons why the document might be covered
+by the GNU General Public License. If you modify this font, you may
+extend this exception to your version of the font, but you are not
+obligated to do so. If you do not wish to do so, delete this exception
+statement from your version.
+
+================================================================================
+ THIRD-PARTY LIBRARIES
+================================================================================
+
+This application links against the following third-party libraries.
+Each is GPL-3.0 compatible. Full license texts are in the licenses/
+directory.
+
+DYNAMICALLY LINKED (LGPL-3.0, shipped as .so files in entry/libs/):
+  - Qt 6.12 (Core, Gui, Widgets, Svg, OpenGL, Concurrent)
+    Copyright (C) The Qt Company Ltd.
+    Licensed under LGPL-3.0. Users may replace Qt .so files.
+    Source: https://www.qt.io/
+    OpenHarmony port: https://gitee.com/openharmony-sig/qt
+
+STATICALLY LINKED (permissive licenses, compiled into libengraving_cross.a):
+  - FreeType 2.14.1 — FTL / GPL-2.0 dual license
+    Copyright (C) 1996-2002, 2006 David Turner, Robert Wilhelm, Werner Lemberg
+    See: licenses/FREETYPE_LICENSE.txt
+
+  - HarfBuzz 12.3.0 — Old MIT license
+    Copyright (C) 2010-2022 Google, Inc.
+    Copyright (C) 2015-2020 Ebrahim Byagowi
+    See: licenses/HARFBUZZ_LICENSE.txt
+
+  - msdfgen 1.12 — MIT License
+    Copyright (C) Chlumsky
+    See: licenses/MSDFGEN_LICENSE.txt
+
+  - pugixml 1.15 — MIT License
+    Copyright (C) 2006-2024 Arseny Kapoulkine
+    See: licenses/PUGIXML_LICENSE.txt
+
+  - picojson — BSD 2-Clause License
+    Copyright (C) 2009-2010 Cybozu Labs, Inc.
+    Copyright (C) 2011-2014 Kazuho Oku
+    See: licenses/PICOJSON_LICENSE.txt
+
+  - lodepng — Zlib License
+    Copyright (C) 2005-2018 Lode Vandevenne
+    See: licenses/LODEPNG_LICENSE.txt
+
+  - utfcpp — Boost Software License 1.0
+    Copyright (C) 2006 Nemanja Trifunovic
+    See: licenses/UTFCPP_LICENSE.txt
+
+EMBEDDED AS RESOURCES (SIL Open Font License 1.1, see licenses/fonts/):
+  - Leland, Bravura, Edwin, MScore, Gootville, MuseJazz,
+    Petaluma, Finale Maestro, Finale Broadway, Campania
+    Each font's full OFL text is in licenses/fonts/<NAME>_OFL.txt
+
+  - FreeSerif, FreeSans — GNU Freefont License
+    Covered by the font embedding exception above.
+
+RUNTIME SYSTEM FONT (not embedded, loaded from device):
+  - Noto Sans CJK — SIL Open Font License 1.1
+    Copyright (c) 2014-2023 Adobe (http://adobe.com/), with Reserved Font Name 'Source'
+
+================================================================================
+ QT LGPL-3.0 COMPLIANCE
+================================================================================
+
+Qt 6.12 is dynamically linked (.so files shipped alongside the application).
+Users can replace these .so files with a modified version of Qt.
+
+The Qt for OpenHarmony port patches applied to the x86_64 self-built kit
+(src/plugins/platforms/minimal/qminimalintegration.cpp) are modifications
+to LGPL-3.0 licensed code. The modified source is available in the project
+build toolchain at: qt-x64-kit-src/qtbase/
+
+The Qt for OpenHarmony port patches applied to MuseScore's muse framework
+(muse/framework/draw/internal/qpainterprovider.cpp and
+muse/framework/draw/internal/qpainterprovider.h) are modifications to
+GPL-3.0 licensed code, distributed as part of this project's source.
+
+================================================================================
+ PATENT CLAIMS
+================================================================================
+
+MuseScore OH relies on Qt's LGPL-3.0 grant and makes no additional patent
+claims beyond what GPL-3.0 Sections 10-12 provide.

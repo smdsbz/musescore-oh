@@ -1,0 +1,6 @@
+{
+  "name": "libmsoh.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "MuseScore OH native module: mscz zip reader"
+}

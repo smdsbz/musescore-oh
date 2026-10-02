@@ -1,0 +1,33 @@
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+/.cache
+
+# build artifacts & toolchain caches (not source code)
+/.qt5ohos.zip
+*.log
+*.tmp
+/.deps
+/build-engraving
+/.qoder
+
+# test score corpus (copyrighted material — never commit)
+/samples/
+/entry/src/main/resources/rawfile/*.mscz
+
+# prebuilt shared libraries (shipped in hap, rebuilt from external toolchain)
+/entry/src/main/libs/
+/entry/src/libs/
+/entry/libs/
+
+# rcc-generated resource files (rebuildable from MuseScore source)
+/entry/src/main/cpp-engine/generated/

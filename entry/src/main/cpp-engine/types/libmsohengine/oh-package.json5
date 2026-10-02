@@ -1,0 +1,6 @@
+{
+  "name": "libmsohengine.so",
+  "types": "./index.d.ts",
+  "version": "1.0.0",
+  "description": "MuseScore OH native engine module: MS4 engraving rw chain"
+}
