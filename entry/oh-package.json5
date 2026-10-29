@@ -6,7 +6,6 @@
   "author": "",
   "license": "",
   "dependencies": {
-    "libmsoh.so": "file:./src/main/cpp/types/libmsoh",
-    "libmsohengine.so": "file:./src/main/cpp-engine/types/libmsohengine"
+    "libmsohengine.so": "file:./src/main/cpp/types/libmsohengine"
   }
 }

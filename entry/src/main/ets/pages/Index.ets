@@ -1,306 +1,286 @@
-import { picker, fileIo } from '@kit.CoreFileKit';
+import { common } from '@kit.AbilityKit';
 import bundleManager from '@ohos.bundle.bundleManager';
 import deviceInfo from '@ohos.deviceInfo';
-import { MsczMetadata } from '../model/MsczMetadata';
-import { EngineReader } from '../engine/EngineReader';
-import { errMessage } from '../mscz/MsczReader';
+import {
+  HdsNavigation, HdsNavigationTitleMode, TextStyleMode, HdsListItemCard, SuffixArrow,
+  ScrollEffectType, BlurStrategy, hdsMaterial
+} from '@kit.UIDesignKit';
+import { LengthMetrics } from '@kit.ArkUI';
 import { engineInfo, engineSetup } from 'libmsohengine.so';
-import { EngineParseResult } from '../engine/EngineTypes';
+import { ScoreLibrary, ScoreFileEntry } from '../data/ScoreLibrary';
+import { ScoreView, ScoreViewParams } from './ScoreView';
 
-interface SampleItem {
-  rawfile: string;
-  label: string;
-  fmt: string;
+const TAG = 'Index';
+/** 内容顶部让位量：ignoreLayoutSafeArea(TOP) 后视口含状态栏，
+ *  需让出「状态栏+迷你标题栏」全高（OhMyWiki 同配方实测 104vp） */
+const TITLE_INSET_TOTAL: number = 108;
+
+interface ScoreItem {
+  entry: ScoreFileEntry;
+  key: string;
 }
 
-@Component
-struct MetaRowComp {
-  @Prop label: string = '';
-  @Prop value: string = '';
-
-  build() {
-    Row() {
-      Text(this.label)
-        .fontSize(13)
-        .opacity(0.55)
-        .width(96)
-      Text(this.value === '' ? '—' : this.value)
-        .fontSize(15)
-        .layoutWeight(1)
-        .maxLines(3)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .width('100%')
-    .padding({ top: 6, bottom: 6 })
+function formatSize(bytes: number): string {
+  if (bytes >= 1048576) {
+    return (bytes / 1048576).toFixed(1) + ' MB';
   }
+  if (bytes >= 1024) {
+    return Math.round(bytes / 1024) + ' KB';
+  }
+  return bytes + ' B';
+}
+
+function formatDate(sec: number): string {
+  const d = new Date(sec * 1000);
+  const p = (n: number): string => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 @Entry
 @Component
 struct Index {
-  @State engine: string = '';
-  @State samples: SampleItem[] = [
-    { rawfile: 'bad_moon.mscz', label: 'Bad Moon', fmt: 'MS 2.0.3 / 格式 2.06' },
-    { rawfile: 'stay_with_me.mscz', label: '真夜中のドア / Stay With Me', fmt: 'MS 3.5.2 / 格式 3.01' },
-    { rawfile: 'omens_of_love.mscz', label: 'Omens of Love', fmt: 'MS 3.2.2 / 格式 3.01' },
-    { rawfile: 'take_me.mscz', label: 'Take Me (Mint Jams)', fmt: 'MS 4.6.5 / 格式 4.60' },
-  ];
-  @State meta: MsczMetadata | null = null;
-  @State engineUsed: string = '';
-  @State pageImg: string = '';
-  @State pageVersion: number = 0;
-  @State viewerOpen: boolean = false;
-  @State pageErr: string = '';
-  @State busy: boolean = false;
-  @State errorText: string = '';
-  @State activeRawfile: string = '';
+  private pathStack: NavPathStack = new NavPathStack();
+  @State scores: ScoreItem[] = [];
+  @State loading: boolean = true;
+  @State errorMsg: string = '';
+  @State publicPath: string = '';
+  @State seeding: boolean = false;
+  private scroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    ScoreLibrary.init(ctx);
+    this.publicPath = ScoreLibrary.getDisplayRoot();
     try {
-      this.engine = engineInfo();
+      // 引擎无头环境初始化：必须在主 JS 线程（详见 mscore_engine.cpp EngineSetup）
+      console.info(`MSOH engine: ${engineInfo()}`);
       engineSetup({
-        'bundle.bundleManager': {
-          'BundleFlag': bundleManager.BundleFlag,
-          'getBundleInfoForSelfSync': bundleManager.getBundleInfoForSelfSync
-        },
-        'deviceInfo': {
-          'deviceType': deviceInfo.deviceType,
-          'marketName': deviceInfo.marketName,
-          'productModel': deviceInfo.productModel,
-          'osFullName': deviceInfo.osFullName,
-          'brand': deviceInfo.brand,
-          'manufacture': deviceInfo.manufacture,
-          'sdkApiVersion': deviceInfo.sdkApiVersion,
-          'displayVersion': deviceInfo.displayVersion,
-          'majorVersion': deviceInfo.majorVersion,
-          'seniorVersion': deviceInfo.seniorVersion,
-          'featureVersion': deviceInfo.featureVersion
-        }
-      }, this.getUIContext().getHostContext()!.cacheDir);
-    } catch (e) {
-      this.engine = `native 加载失败: ${errMessage(e as Object)}`;
-    }
-  }
-
-  async parseRawfile(item: SampleItem): Promise<void> {
-    if (this.busy) {
-      return;
-    }
-    this.busy = true;
-    this.errorText = '';
-    this.activeRawfile = item.rawfile;
-    this.pageImg = '';
-    this.pageErr = '';
-    try {
-      const ctx = this.getUIContext().getHostContext()!;
-      const bytes: Uint8Array = await ctx.resourceManager.getRawFileContent(item.rawfile);
-      const pageIndex = item.rawfile === 'omens_of_love.mscz' ? 1 : 0;
-      const result: EngineParseResult = await EngineReader.parseBytes(bytes, item.rawfile, ctx.cacheDir, false, pageIndex);
-      this.meta = result.meta;
-      this.engineUsed = result.engineUsed;
-      const pagePath = `${ctx.cacheDir}/page0.png`;
-      let exists = false;
-      try {
-        exists = fileIo.accessSync(pagePath);
+          'bundle.bundleManager': {
+            'BundleFlag': bundleManager.BundleFlag,
+            'getBundleInfoForSelfSync': bundleManager.getBundleInfoForSelfSync
+          },
+          'deviceInfo': {
+            'deviceType': deviceInfo.deviceType,
+            'marketName': deviceInfo.marketName,
+            'productModel': deviceInfo.productModel,
+            'osFullName': deviceInfo.osFullName,
+            'brand': deviceInfo.brand,
+            'manufacture': deviceInfo.manufacture,
+            'sdkApiVersion': deviceInfo.sdkApiVersion,
+            'displayVersion': deviceInfo.displayVersion,
+            'majorVersion': deviceInfo.majorVersion,
+            'seniorVersion': deviceInfo.seniorVersion,
+            'featureVersion': deviceInfo.featureVersion
+          }
+        }, ctx.cacheDir);
       } catch (e) {
-        console.info(`MSOH access check failed: ${JSON.stringify(e)}`);
+        console.info(`MSOH engine setup failed: ${JSON.stringify(e)}`);
       }
-      if (result.rendered && exists) {
-        this.pageVersion++;
-        this.pageImg = `file://${pagePath}?v=${this.pageVersion}`;
-      } else {
-        this.pageErr = result.rendered ? 'PNG 未找到' : result.renderError;
-      }
-    } catch (e) {
-      this.meta = null;
-      this.errorText = errMessage(e as Object);
-    }
-    this.busy = false;
+    this.refresh();
   }
 
-  async openPicker(): Promise<void> {
-    if (this.busy) {
-      return;
-    }
-    this.busy = true;
-    this.errorText = '';
-    this.pageImg = '';
-    this.pageErr = '';
+  async refresh(): Promise<void> {
+    this.loading = true;
+    this.errorMsg = '';
     try {
-      const docPicker = new picker.DocumentViewPicker();
-      const uris: string[] = await docPicker.select({
-        fileSuffixFilters: ['mscz'],
-        maxSelectNumber: 1,
-      });
-      if (uris.length > 0) {
-        const ctx = this.getUIContext().getHostContext()!;
-        const file = fileIo.openSync(uris[0], fileIo.OpenMode.READ_ONLY);
-        const stat = fileIo.statSync(file.fd);
-        const buf = new ArrayBuffer(stat.size);
-        fileIo.readSync(file.fd, buf);
-        fileIo.closeSync(file.fd);
-        const bytes = new Uint8Array(buf);
-        const name = decodeURIComponent(uris[0].split('/').pop() ?? uris[0]);
-        const result: EngineParseResult = await EngineReader.parseBytes(bytes, name, ctx.cacheDir, false, 0);
-        this.meta = result.meta;
-        this.engineUsed = result.engineUsed;
-        this.activeRawfile = '';
-        const pagePath = `${ctx.cacheDir}/page0.png`;
-        let exists = false;
-        try {
-          exists = fileIo.accessSync(pagePath);
-        } catch (e) {
-          exists = false;
-        }
-        if (result.rendered && exists) {
-          this.pageVersion++;
-          this.pageImg = `file://${pagePath}?v=${this.pageVersion}`;
-        } else {
-          this.pageErr = result.rendered ? 'PNG 未找到' : result.renderError;
-        }
+      await ScoreLibrary.ensureDir();
+      const list = await ScoreLibrary.listScores();
+      const items: ScoreItem[] = [];
+      for (const e of list) {
+        items.push({ entry: e, key: e.fileName });
       }
+      this.scores = items;
+      console.info(`MSOH ${TAG}: discovered ${items.length} scores`);
     } catch (e) {
-      this.errorText = errMessage(e as Object);
+      this.errorMsg = '扫描失败：' + JSON.stringify(e);
     }
-    this.busy = false;
+    this.loading = false;
+  }
+
+  private openScore(item: ScoreItem): void {
+    const params: ScoreViewParams = {
+      fileName: item.entry.fileName
+    };
+    this.pathStack.pushPathByName('ScoreView', params);
+  }
+
+  /** 把内置示例曲谱复制进公共下载目录（rawfile 未打包样本时提示） */
+  private async seedSamples(): Promise<void> {
+    this.seeding = true;
+    try {
+      const n = await ScoreLibrary.seedBuiltinSamples();
+      if (n === 0) {
+        this.getUIContext().getPromptAction().showToast({ message: '没有可导入的内置示例', duration: 2000 });
+      } else {
+        this.getUIContext().getPromptAction().showToast({ message: `已导入 ${n} 份示例曲谱`, duration: 2000 });
+        await this.refresh();
+      }
+    } finally {
+      this.seeding = false;
+    }
   }
 
   build() {
-    Stack() {
+    HdsNavigation(this.pathStack) {
       Column() {
-        Column() {
-          Text('MuseScore OH')
-            .fontSize(24)
-            .fontWeight(FontWeight.Bold)
-          Text(this.engine)
-            .fontSize(11)
-            .opacity(0.5)
-            .maxLines(1)
-            .margin({ top: 4 })
-        }
-        .width('100%')
-        .padding(16)
-        .alignItems(HorizontalAlign.Start)
-
-        Scroll() {
-          Column() {
-            Text('内置样本(只读)')
+        if (this.loading) {
+          Column({ space: 8 }) {
+            LoadingProgress()
+              .width(40)
+              .height(40)
+              .color($r('sys.color.brand'))
+            Text('正在扫描曲谱库…')
               .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .padding({ top: 4, bottom: 8 })
-            ForEach(this.samples, (item: SampleItem) => {
-              Row() {
-                Column() {
-                  Text(item.label)
-                    .fontSize(15)
-                  Text(item.fmt)
-                    .fontSize(11)
-                    .opacity(0.5)
-                    .margin({ top: 2 })
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
-
-                if (this.activeRawfile === item.rawfile && this.busy) {
-                  LoadingProgress()
-                    .width(20)
-                    .height(20)
-                } else {
-                  Text('解析')
-                    .fontSize(14)
-                    .fontColor('#007DFF')
-                }
-              }
-              .width('100%')
-              .padding(12)
-              .borderRadius(12)
-              .backgroundColor(this.activeRawfile === item.rawfile ? '#1A007DFF' : Color.Transparent)
-              .onClick(() => {
-                this.parseRawfile(item);
-              })
-            }, (item: SampleItem) => item.rawfile)
-
-            Button('从文件选择 .mscz…')
-              .width('100%')
-              .margin({ top: 8, bottom: 16 })
-              .backgroundColor('#007DFF')
-              .onClick(() => {
-                this.openPicker();
-              })
-
-            if (this.errorText !== '') {
-              Text(this.errorText)
-                .fontSize(13)
-                .fontColor('#E84026')
-                .padding(12)
-                .width('100%')
-            }
-
-            if (this.meta !== null) {
-              Column() {
-                Text(this.meta.title)
-                  .fontSize(19)
-                  .fontWeight(FontWeight.Bold)
-                if (this.meta.subtitle !== '') {
-                  Text(this.meta.subtitle)
-                    .fontSize(13)
-                    .opacity(0.7)
-                    .margin({ top: 2 })
-                }
-                Divider().margin({ top: 10, bottom: 6 })
-                MetaRowComp({ label: '引擎', value: this.engineUsed })
-                if (this.pageErr !== '') {
-                  MetaRowComp({ label: '渲染', value: `失败: ${this.pageErr}` })
-                }
-                if (this.pageImg !== '') {
-                  Image(this.pageImg)
-                    .objectFit(ImageFit.Contain)
-                    .width('100%')
-                    .height(320)
-                    .backgroundColor('#F5F5F5')
-                    .borderRadius(8)
-                    .margin({ top: 8 })
-                    .onClick(() => {
-                      this.viewerOpen = true;
-                    })
-                }
-                MetaRowComp({ label: '作曲', value: this.meta.composer })
-                MetaRowComp({ label: '作词/改编', value: this.meta.lyricist })
-                MetaRowComp({ label: '格式版本', value: `${this.meta.formatVersion}(程序 ${this.meta.programVersion})` })
-                MetaRowComp({ label: '谱表/小节', value: `${this.meta.staffCount} 表 / ${this.meta.measureCount} 小节` })
-                MetaRowComp({ label: '拍号', value: this.meta.timeSig })
-                MetaRowComp({ label: '调号', value: this.meta.keySig })
-                MetaRowComp({ label: '速度', value: this.meta.tempoBpm > 0 ? `${this.meta.tempoBpm} BPM` : '' })
-                MetaRowComp({ label: 'Division', value: this.meta.division > 0 ? `${this.meta.division}` : '' })
-                MetaRowComp({ label: '解析耗时', value: `${this.meta.parseMillis} ms` })
-              }
-              .width('100%')
-              .padding(16)
-              .borderRadius(16)
-              .backgroundColor('#14000000')
-              .alignItems(HorizontalAlign.Start)
-            }
+              .fontColor($r('sys.color.font_tertiary'))
           }
-          .constraintSize({ minHeight: '100%' })
-          .padding({ left: 16, right: 16, bottom: 32 })
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Scroll(this.scroller) {
+            Column({ space: 12 }) {
+              if (this.errorMsg.length > 0) {
+                Text(this.errorMsg)
+                  .fontSize(13)
+                  .fontColor($r('app.color.error'))
+                  .padding(12)
+              }
+
+              if (this.scores.length === 0) {
+                this.EmptyGuide()
+              } else {
+                Text(`共 ${this.scores.length} 份曲谱 · ${this.publicPath}`)
+                  .fontSize(13)
+                  .fontColor($r('sys.color.font_tertiary'))
+                  .width('100%')
+                  .padding({ left: 16, right: 16 })
+
+                ForEach(this.scores, (item: ScoreItem) => {
+                  HdsListItemCard({
+                    textItem: {
+                      primaryText: { text: item.entry.displayName },
+                      secondaryText: {
+                        text: `${formatSize(item.entry.sizeBytes)} · ${formatDate(item.entry.mtime)}`
+                      }
+                    },
+                    suffixItem: new SuffixArrow(),
+                    onClick: (): void => {
+                      this.openScore(item);
+                    }
+                  })
+                }, (item: ScoreItem) => item.key)
+              }
+            }
+            .width('100%')
+            .padding({ top: TITLE_INSET_TOTAL, bottom: 32 })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Off)
+          .align(Alignment.Top)
+          .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
         }
-        .layoutWeight(1)
-        .align(Alignment.Top)
-        .scrollBar(BarState.Auto)
       }
       .width('100%')
       .height('100%')
-
-      if (this.viewerOpen && this.pageImg !== '') {
-        Image(this.pageImg)
-          .objectFit(ImageFit.Contain)
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#EE000000')
-          .onClick(() => {
-            this.viewerOpen = false;
-          })
-      }
+      .backgroundColor($r('sys.color.comp_background_gray'))
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
+    .titleBar({
+      content: {
+        title: { mainTitle: '乐谱' },
+        menu: {
+          value: [{
+            content: {
+              label: '刷新',
+              type: TextStyleMode.NORMAL,
+              action: (): void => {
+                this.refresh();
+              }
+            }
+          }]
+        }
+      },
+      style: {
+        scrollEffectOpts: {
+          enableScrollEffect: true,
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+          blurEffectiveStartOffset: LengthMetrics.vp(20),
+          blurEffectiveEndOffset: LengthMetrics.vp(60)
+        },
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+        },
+        blurStrategy: BlurStrategy.ENABLE,
+        originalStyle: {
+          backgroundStyle: {
+            backgroundColor: $r('sys.color.comp_background_gray'),
+            blurRadius: 12,
+            maskExtraHeight: 24
+          },
+          contentStyle: {
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
+            menuStyle: { iconColor: $r('sys.color.font_primary'), textColor: $r('sys.color.font_primary') }
+          }
+        },
+        scrollEffectStyle: {
+          backgroundStyle: { backgroundColor: Color.Transparent, blurRadius: 12, maskExtraHeight: 24 },
+          contentStyle: {
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
+            menuStyle: { iconColor: $r('sys.color.font_primary'), textColor: $r('sys.color.font_primary') }
+          }
+        }
+      }
+    })
+    .titleMode(HdsNavigationTitleMode.MINI)
+    .hideBackButton(true)
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+    .bindToScrollable([this.scroller])
+    .mode(NavigationMode.Stack)
+    .navDestination(this.PageMap)
+  }
+
+  @Builder
+  PageMap(name: string, param: ESObject) {
+    if (name === 'ScoreView') {
+      ScoreView({ fileName: (param as ScoreViewParams).fileName })
+    }
+  }
+
+  @Builder
+  EmptyGuide() {
+    Column({ space: 10 }) {
+      Text('曲谱库为空')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('sys.color.font_primary'))
+        .margin({ top: 32 })
+
+      Text('把 .mscz 曲谱文件放进手机的公共下载目录，每份曲谱就会出现在这里。\n' +
+        '路径：我的手机 → ' + this.publicPath)
+        .fontSize(14)
+        .fontColor($r('sys.color.font_secondary'))
+        .textAlign(TextAlign.Start)
+        .lineHeight(22)
+        .padding({ left: 24, right: 24 })
+
+      Text('放入文件后回到本应用，点右上角「刷新」。')
+        .fontSize(13)
+        .fontColor($r('sys.color.font_tertiary'))
+
+      Button(this.seeding ? '正在导入…' : '导入内置示例曲谱')
+        .height(48)
+        .fontSize(16)
+        .fontColor(Color.White)
+        .backgroundColor($r('sys.color.brand'))
+        .borderRadius(24)
+        .padding({ left: 24, right: 24 })
+        .margin({ top: 12 })
+        .enabled(!this.seeding)
+        .onClick(() => {
+          this.seedSamples();
+        })
+    }
+    .width('100%')
+    .padding({ left: 16, right: 16, bottom: 32 })
   }
 }

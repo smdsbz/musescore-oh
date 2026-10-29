@@ -8,7 +8,7 @@ cd musescore-oh
 devecocli build          # 就这一步,无其他配置
 ```
 
-首次构建由 `entry/src/main/cpp-engine/CMakeLists.txt` 全自动完成,不需要任何
+首次构建由 `entry/src/main/cpp/CMakeLists.txt` 全自动完成,不需要任何
 bash/Python 脚本或手工步骤(纯 CMake):
 
 1. 下载 MuseScore 源码(gitee 镜像)+ muse framework + 8 个三方库 → `.deps/`
@@ -30,17 +30,15 @@ bash/Python 脚本或手工步骤(纯 CMake):
 
 可选环境变量:`MSOH_DEPS_ROOT` 自定义依赖根目录(默认 `<repo>/.deps`)。
 
-## 内置样本(可选)
+## 曲谱文件放置(应用数据)
 
-应用首页的内置样本列表读取 `entry/src/main/resources/rawfile/` 下的 mscz
-(bad_moon / stay_with_me / omens_of_love / take_me)。这些是**有版权的乐谱,
-不入库**;构建前自行放置(例:从你自己的 MuseScore 导出或测试语料复制):
+应用主页列出公共下载目录 `Download/com.example.musescoreoh/` 下的 `.mscz`
+文件(目录不存在时应用会自建)。把曲谱放进该目录后回到应用点「刷新」即可:
+真机也可用文件管理器直接把 mscz 拷进该目录。
 
-```bash
-cp <你的样本目录>/*.mscz entry/src/main/resources/rawfile/
-```
-
-不放也能构建运行:首页样本列表点开无谱可载,「从文件选择 .mscz」功能不受影响。
+可选：`entry/src/main/resources/rawfile/*.mscz`（gitignored，不入库）打包后，
+主页空状态会出现「导入内置示例曲谱」按钮，一键把样本复制进公共下载目录
+（模拟器上用户存储被隔离、hdc 无法直写，这是唯一的样本注入通道）。
 
 ## 首次构建耗时与体积
 
@@ -60,7 +58,7 @@ cp <你的样本目录>/*.mscz entry/src/main/resources/rawfile/
 .deps/                     依赖与套件缓存(MuseScore/ msoh-deps/ qt-*kit/)
 build-engraving/<abi>/     engraving_cross 静态库构建目录
 entry/libs/<abi>/          随 hap 打包的 Qt .so(含 libqminimal.so)
-entry/src/main/cpp-engine/generated/   rcc 产物(qrc_*.cpp)
+entry/src/main/cpp/generated/   rcc 产物(qrc_*.cpp)
 entry/.cxx/ entry/build/  hvigor 的 cmake/hap 产物
 ```
 

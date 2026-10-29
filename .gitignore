@@ -30,4 +30,4 @@
 /entry/libs/
 
 # rcc-generated resource files (rebuildable from MuseScore source)
-/entry/src/main/cpp-engine/generated/
+/entry/src/main/cpp/generated/

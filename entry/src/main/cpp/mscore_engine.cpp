@@ -20,6 +20,8 @@
 #include <QRawFont>
 #include <QGuiApplication>
 #include <map>
+#include <mutex>
+#include <vector>
 #include <dlfcn.h>
 #include <QFile>
 #include <QFileInfo>
@@ -34,6 +36,7 @@
 #include "engraving/compat/scoreaccess.h"
 #include "engraving/dom/instrtemplate.h"
 #include "engraving/dom/masterscore.h"
+#include "engraving/dom/excerpt.h"
 #include "engraving/rendering/score/paint.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/box.h"
@@ -513,42 +516,38 @@ static napi_value EngineSetup(napi_env env, napi_callback_info info)
     return result;
 }
 
-static mu::engraving::MasterScore* LoadScoreFromBytes(const void* data, size_t length,
-                                                       const std::string& dir, muse::Ret& ret)
+// Loaded scores stay alive for the whole process: destroying a score
+// corrupts loader-shared state, so any later loadMsczOrMscx returns
+// FileCriticallyCorrupted (observed with the Aug-2026 main snapshot).
+// Handles are append-only; a viewer session opens a handful of scores.
+struct OpenedScore {
+    mu::engraving::MasterScore* score;
+};
+static std::mutex g_scoresMutex;
+static std::vector<OpenedScore> g_scores;
+
+static mu::engraving::MasterScore* ScoreByHandle(int handle)
 {
-    static std::atomic<int> seq{ 0 };
-    const QString path = QString("%1/mscore_render_%2.mscz")
-                             .arg(QString::fromStdString(dir))
-                             .arg(seq.fetch_add(1));
-    {
-        QFile f(path);
-        if (!f.open(QIODevice::WriteOnly)) {
-            return nullptr;
-        }
-        f.write(static_cast<const char*>(data), static_cast<qint64>(length));
+    std::lock_guard<std::mutex> lock(g_scoresMutex);
+    if (handle < 0 || handle >= static_cast<int>(g_scores.size())) {
+        return nullptr;
     }
-    mu::engraving::MasterScore* score
-        = mu::engraving::compat::ScoreAccess::createMasterScoreWithBaseStyle(nullptr);
-    ret = mu::engraving::compat::loadMsczOrMscx(score, muse::io::path_t(path), false);
-    QFile::remove(path);
-    return score;
+    return g_scores[handle].score;
 }
 
-// args: bytes, tempDir, [outPagePath, dpi] — when outPagePath given, the
-// already-loaded score is laid out and page 1 rendered to PNG in the same
-// call (a second load in a later call hits FileCriticallyCorrupted after the
-// first score teardown corrupts shared state).
-static napi_value EngineLoadMeta(napi_env env, napi_callback_info info)
+// args: bytes(Uint8Array), tempDir(string)
+// Loads the score once, lays out master + all excerpt scores, returns
+// metadata with the part list and registers the score under a handle.
+static napi_value EngineOpenScore(napi_env env, napi_callback_info info)
 {
-    size_t argc = 5;
-    napi_value argv[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+    size_t argc = 2;
+    napi_value argv[2] = { nullptr, nullptr };
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     if (argc < 2) {
-        napi_throw_type_error(env, nullptr, "engineLoadMeta(bytes: Uint8Array, tempDir: string, [outPath, dpi])");
+        napi_throw_type_error(env, nullptr, "engineOpenScore(bytes: Uint8Array, tempDir: string)");
         return nullptr;
     }
 
-    OH_LOG_Print(LOG_APP, LOG_INFO, 0x0DE0, "MSOHENV", "loadMeta argc=%{public}zu", argc);
     void* data = nullptr;
     size_t length = 0;
     napi_typedarray_type type;
@@ -566,9 +565,8 @@ static napi_value EngineLoadMeta(napi_env env, napi_callback_info info)
     const auto t0 = std::chrono::steady_clock::now();
     EnsureEngineEnv();
 
-    // loadMsczOrMscx reads from a path; stage the bytes into a temp file.
     static std::atomic<int> seq{ 0 };
-    const QString path = QString("%1/mscore_engine_%2.mscz")
+    const QString path = QString("%1/mscore_open_%2.mscz")
                              .arg(QString::fromStdString(dir))
                              .arg(seq.fetch_add(1));
     {
@@ -587,14 +585,31 @@ static napi_value EngineLoadMeta(napi_env env, napi_callback_info info)
     mu::engraving::MasterScore* score
         = mu::engraving::compat::ScoreAccess::createMasterScoreWithBaseStyle(nullptr);
     muse::Ret ret = mu::engraving::compat::loadMsczOrMscx(score, muse::io::path_t(path), false);
+    QFile::remove(path);
 
     std::ostringstream o;
     if (!ret) {
-        o << "{\"engine\":\"mscore4\",\"ok\":false,\"error\":\"" << JsonEscape(ret.toString()) << "\"";
+        o << "{\"ok\":false,\"error\":\"" << JsonEscape(ret.toString()) << "\"}";
         delete score;
-        QFile::remove(path);
     } else {
-        const auto& tags = score->metaTags();
+        // 4.6.5 keeps trailing newlines in <text> out of layout; the
+        // Aug-2026 main snapshot we build from renders them as an extra
+        // empty line. Normalize.
+        score->scanElements([](mu::engraving::EngravingItem* e) {
+            if (e->isText()) {
+                mu::engraving::Text* t = mu::engraving::toText(e);
+                muse::String x = t->xmlText();
+                while (x.endsWith(muse::Char(u'\n')) || x.endsWith(muse::Char(u'\r'))) {
+                    x.remove(x.size() - 1, 1);
+                }
+                if (x != t->xmlText()) {
+                    t->setXmlText(x);
+                }
+            }
+        });
+        for (mu::engraving::Score* sc : score->scoreList()) {
+            sc->doLayout();
+        }
 
         std::string timeSig;
         const mu::engraving::TimeSigMap* sigmap = score->sigmap();
@@ -614,105 +629,31 @@ static napi_value EngineLoadMeta(napi_env env, napi_callback_info info)
             keySig = (i >= 0 && i <= 14) ? KEY_NAMES[i] : std::to_string(keyAcc);
         }
 
-        std::string renderInfo;
-        if (argc >= 3 && argv[2]) {
-            size_t plen = 0;
-            napi_get_value_string_utf8(env, argv[2], nullptr, 0, &plen);
-            std::string outPath(plen, ' ');
-            napi_get_value_string_utf8(env, argv[2], outPath.data(), plen + 1, &plen);
-            double dpi = 120.0;
-            if (argc >= 4) {
-                napi_get_value_double(env, argv[3], &dpi);
+        std::ostringstream parts;
+        for (size_t i = 0; i < score->excerpts().size(); ++i) {
+            const mu::engraving::Excerpt* ex = score->excerpts().at(i);
+            const mu::engraving::Score* ps = ex->excerptScore();
+            if (i > 0) {
+                parts << ",";
             }
-            if (dpi < 36.0) { dpi = 36.0; }
-            if (dpi > 600.0) { dpi = 600.0; }
-            bool rendered = false;
-            int rw = 0;
-            int rh = 0;
-            do {
-                // 4.6.5 keeps trailing newlines in <text> out of layout; the
-                // Aug-2026 main snapshot we build from renders them as an extra
-                // empty line (title frame +12.5mm vs PC reference). Normalize.
-                score->scanElements([](mu::engraving::EngravingItem* e) {
-                    if (e->isText()) {
-                        mu::engraving::Text* t = mu::engraving::toText(e);
-                        muse::String x = t->xmlText();
-                        while (x.endsWith(muse::Char(u'\n')) || x.endsWith(muse::Char(u'\r'))) {
-                            x.remove(x.size() - 1, 1);
-                        }
-                        if (x != t->xmlText()) {
-                            t->setXmlText(x);
-                        }
-                    }
-                });
-                for (mu::engraving::Score* sc : score->scoreList()) {
-                    sc->doLayout();
-                }
-                // VBox(title frame) metrics diagnostics: bbox of each Text + frame
-                if (score->pages().size() > 0) {
-                    mu::engraving::Page* pg = score->pages().at(0);
-                    for (mu::engraving::System* sys : pg->systems()) {
-                        mu::engraving::Box* vb = sys->vbox();
-                        if (vb && vb->isVBox()) {
-                            mu::engraving::RectF vbr = vb->ldata()->bbox();
-                            OH_LOG_Print(LOG_APP, LOG_INFO, 0x0DE0, "MSOHENV",
-                                "VBox bbox w=%{public}.2f h=%{public}.2f", vbr.width(), vbr.height());
-                            for (mu::engraving::EngravingItem* t : vb->el()) {
-                                mu::engraving::RectF tb = t->ldata()->bbox();
-                                OH_LOG_Print(LOG_APP, LOG_INFO, 0x0DE0, "MSOHENV",
-                                    " VBoxText w=%{public}.2f h=%{public}.2f y=%{public}.2f",
-                                    tb.width(), tb.height(), tb.y());
-                            }
-                        }
-                        break; // first system only
-                    }
-                }
-                if (score->pages().empty()) {
-                    renderInfo = ",\"renderOk\":false,\"renderError\":\"no pages after layout\"";
-                    break;
-                }
-                // Mirrors PngWriter::write (imagesexport): self-filled image,
-                // device DPI == render DPI so the viewport covers the whole image.
-                mu::engraving::SizeF psize = mu::engraving::rendering::score::Paint::pageSizeInch(score);
-                rw = static_cast<int>(psize.width() * dpi);
-                rh = static_cast<int>(psize.height() * dpi);
-                QImage image(rw, rh, QImage::Format_ARGB32_Premultiplied);
-                image.setDotsPerMeterX(static_cast<int>((dpi * 1000) / mu::engraving::INCH));
-                image.setDotsPerMeterY(static_cast<int>((dpi * 1000) / mu::engraving::INCH));
-                image.fill(Qt::white);
-                {
-                    muse::draw::Painter painter(&image, "msoh_render");
-                    mu::engraving::rendering::IScoreRenderer::ScorePaintOptions opt;
-                    opt.deviceDpi = static_cast<int>(dpi);
-                    opt.printPageBackground = false;
-                    opt.isPrinting = true;
-                    int pageIdx = 0;
-                    if (argc >= 5 && argv[4]) {
-                        int32_t pv = 0;
-                        napi_get_value_int32(env, argv[4], &pv);
-                        if (pv >= 0) { pageIdx = pv; }
-                    }
-                    opt.fromPage = pageIdx;
-                    opt.toPage = pageIdx;
-                    mu::engraving::rendering::score::Paint::paintScore(&painter, score, opt);
-                }
-                QFile out(QString::fromStdString(outPath));
-                if (out.open(QIODevice::WriteOnly)) {
-                    rendered = image.save(&out, "png");
-                }
-            } while (false);
-            if (rendered) {
-                renderInfo = ",\"renderOk\":true,\"renderW\":" + std::to_string(rw)
-                    + ",\"renderH\":" + std::to_string(rh);
-            } else if (renderInfo.empty()) {
-                renderInfo = ",\"renderOk\":false,\"renderError\":\"write failed\"";
-            }
+            parts << "{\"name\":\"" << JsonEscape(ToStd(ex->name())) << "\""
+                  << ",\"staves\":" << (ps ? ps->nstaves() : 0)
+                  << ",\"measures\":" << (ps ? ps->nmeasures() : 0)
+                  << ",\"pages\":" << (ps ? ps->pages().size() : 0)
+                  << "}";
         }
 
         const auto t1 = std::chrono::steady_clock::now();
         double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-        o << "{\"engine\":\"mscore4\",\"ok\":true"
+        int handle = -1;
+        {
+            std::lock_guard<std::mutex> lock(g_scoresMutex);
+            handle = static_cast<int>(g_scores.size());
+            g_scores.push_back({ score });
+        }
+
+        o << "{\"ok\":true,\"handle\":" << handle
           << ",\"formatVersion\":\"" << JsonEscape(FormatMscVersion(score->mscVersion())) << "\""
           << ",\"title\":\"" << JsonEscape(MetaTag(score, "workTitle").empty()
                 ? MetaTag(score, "title") : MetaTag(score, "workTitle")) << "\""
@@ -721,14 +662,13 @@ static napi_value EngineLoadMeta(napi_env env, napi_callback_info info)
           << ",\"lyricist\":\"" << JsonEscape(MetaTag(score, "lyricist")) << "\""
           << ",\"staffCount\":" << score->nstaves()
           << ",\"measureCount\":" << score->nmeasures()
+          << ",\"pageCount\":" << score->pages().size()
           << ",\"timeSig\":\"" << JsonEscape(timeSig) << "\""
           << ",\"keySig\":\"" << JsonEscape(keySig) << "\""
           << ",\"keySigAccidentals\":" << keyAcc
+          << ",\"parts\":[" << parts.str() << "]"
           << ",\"parseMillis\":" << static_cast<long long>(ms + 0.5)
-          << renderInfo.c_str()
           << "}";
-        delete score;
-        QFile::remove(path);
     }
 
     napi_value result;
@@ -737,107 +677,124 @@ static napi_value EngineLoadMeta(napi_env env, napi_callback_info info)
     return result;
 }
 
-static napi_value EngineInfo(napi_env env, napi_callback_info info)
-{
-    (void)info;
-    napi_value result;
-    napi_create_string_utf8(env,
-                            "msoh native: mscore4 engraving engine (rw full chain, 114-500) + zip reader",
-                            NAPI_AUTO_LENGTH, &result);
-    return result;
-}
-
-
-// args: bytes(Uint8Array), tempDir(string), outPath(string), dpi(number)
-static napi_value EngineRenderPage(napi_env env, napi_callback_info info)
+// args: handle(int), viewIndex(int), outDir(string), dpi(number)
+// viewIndex < 0 renders the master score; >= 0 renders excerpts()[i].
+// Every page becomes outDir/p<idx>.png (dir created if missing).
+static napi_value EngineRenderView(napi_env env, napi_callback_info info)
 {
     size_t argc = 4;
     napi_value argv[4] = { nullptr, nullptr, nullptr, nullptr };
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     if (argc < 3) {
-        napi_throw_type_error(env, nullptr, "engineRenderPage(bytes, tempDir, outPath, dpi?)");
+        napi_throw_type_error(env, nullptr, "engineRenderView(handle: number, viewIndex: number, outDir: string, dpi?: number)");
         return nullptr;
     }
-    void* data = nullptr;
-    size_t length = 0;
-    napi_typedarray_type type;
-    napi_get_typedarray_info(env, argv[0], &type, &length, &data, nullptr, nullptr);
-    if (type != napi_uint8_array) {
-        napi_throw_type_error(env, nullptr, "bytes must be Uint8Array");
-        return nullptr;
-    }
-    auto readStr = [&](napi_value v) {
-        size_t len = 0;
-        napi_get_value_string_utf8(env, v, nullptr, 0, &len);
-        std::string s(len, ' ');
-        napi_get_value_string_utf8(env, v, s.data(), len + 1, &len);
-        return s;
-    };
-    const std::string dir = readStr(argv[1]);
-    const std::string outPath = readStr(argv[2]);
+    int32_t handle = 0;
+    int32_t viewIndex = -1;
+    napi_get_value_int32(env, argv[0], &handle);
+    napi_get_value_int32(env, argv[1], &viewIndex);
+    size_t plen = 0;
+    napi_get_value_string_utf8(env, argv[2], nullptr, 0, &plen);
+    std::string outDir(plen, '\0');
+    napi_get_value_string_utf8(env, argv[2], outDir.data(), plen + 1, &plen);
     double dpi = 150.0;
     if (argc >= 4) {
         napi_get_value_double(env, argv[3], &dpi);
     }
     if (dpi < 36.0) { dpi = 36.0; }
-    if (dpi > 600.0) { dpi = 600.0; }
+    if (dpi > 300.0) { dpi = 300.0; }
 
-    EnsureEngineEnv();
     const auto t0 = std::chrono::steady_clock::now();
+    EnsureEngineEnv();
 
     std::ostringstream o;
-    muse::Ret ret;
-    mu::engraving::MasterScore* score = LoadScoreFromBytes(data, length, dir, ret);
-    bool ok = false;
-    int w = 0;
-    int h = 0;
+    mu::engraving::MasterScore* master = ScoreByHandle(handle);
+    mu::engraving::Score* view = nullptr;
     do {
-        if (!score || !ret) {
-            o << "{\"ok\":false,\"error\":\"" << JsonEscape(ret.toString()) << "\"";
+        if (master == nullptr) {
+            o << "{\"ok\":false,\"error\":\"invalid handle\"}";
             break;
         }
-        for (mu::engraving::Score* s : score->scoreList()) {
-            s->doLayout();
-        }
-        if (score->pages().empty()) {
-            o << "{\"ok\":false,\"error\":\"no pages after layout\"";
-            break;
-        }
-        mu::engraving::SizeF psize = mu::engraving::rendering::score::Paint::pageSizeInch(score);
-        w = static_cast<int>(psize.width() * dpi);
-        h = static_cast<int>(psize.height() * dpi);
-        auto px = std::make_shared<muse::draw::Pixmap>(w, h);
-        auto provider = muse::draw::QImagePainterProvider::make(px);
-        {
-            muse::draw::Painter painter(provider, "msoh_render");
-            mu::engraving::rendering::IScoreRenderer::ScorePaintOptions opt;
-            opt.deviceDpi = static_cast<int>(dpi);
-            opt.printPageBackground = false;
-            mu::engraving::rendering::score::Paint::paintScore(&painter, score, opt);
-        }
-        provider->endTarget(true);
-        QFile out(QString::fromStdString(outPath));
-        if (out.open(QIODevice::WriteOnly)) {
-            out.write(reinterpret_cast<const char*>(px->data().constData()),
-                      static_cast<qint64>(px->data().size()));
-            ok = true;
+        if (viewIndex < 0) {
+            view = master;
         } else {
-            o << "{\"ok\":false,\"error\":\"cannot write output file\"";
+            const auto& exs = master->excerpts();
+            if (viewIndex >= static_cast<int>(exs.size())) {
+                o << "{\"ok\":false,\"error\":\"invalid viewIndex\"}";
+                break;
+            }
+            view = exs.at(viewIndex)->excerptScore();
+            if (view == nullptr) {
+                o << "{\"ok\":false,\"error\":\"excerpt has no score\"}";
+                break;
+            }
+        }
+        if (view->pages().empty()) {
+            view->doLayout();
+        }
+        if (view->pages().empty()) {
+            o << "{\"ok\":false,\"error\":\"no pages after layout\"}";
             break;
+        }
+        QDir().mkpath(QString::fromStdString(outDir));
+
+        const mu::engraving::SizeF psize = mu::engraving::rendering::score::Paint::pageSizeInch(view);
+        const int rw = static_cast<int>(psize.width() * dpi);
+        const int rh = static_cast<int>(psize.height() * dpi);
+
+        std::ostringstream pages;
+        bool ok = true;
+        int n = static_cast<int>(view->pages().size());
+        for (int i = 0; i < n && ok; ++i) {
+            QImage image(rw, rh, QImage::Format_ARGB32_Premultiplied);
+            image.setDotsPerMeterX(static_cast<int>((dpi * 1000) / mu::engraving::INCH));
+            image.setDotsPerMeterY(static_cast<int>((dpi * 1000) / mu::engraving::INCH));
+            image.fill(Qt::white);
+            {
+                muse::draw::Painter painter(&image, "msoh_render");
+                mu::engraving::rendering::IScoreRenderer::ScorePaintOptions opt;
+                opt.deviceDpi = static_cast<int>(dpi);
+                opt.printPageBackground = false;
+                opt.isPrinting = true;
+                opt.fromPage = i;
+                opt.toPage = i;
+                mu::engraving::rendering::score::Paint::paintScore(&painter, view, opt);
+            }
+            const std::string file = outDir + "/p" + std::to_string(i) + ".png";
+            QFile out(QString::fromStdString(file));
+            if (!(out.open(QIODevice::WriteOnly) && image.save(&out, "png"))) {
+                o << "{\"ok\":false,\"error\":\"write failed at page " << i << "\"";
+                ok = false;
+                break;
+            }
+            if (i > 0) {
+                pages << ",";
+            }
+            pages << "{\"file\":\"" << file << "\",\"w\":" << rw << ",\"h\":" << rh << "}";
+        }
+        if (ok) {
+            const auto t1 = std::chrono::steady_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+            o << "{\"ok\":true,\"pageCount\":" << n
+              << ",\"pages\":[" << pages.str() << "]"
+              << ",\"ms\":" << static_cast<long long>(ms + 0.5) << "}";
         }
     } while (false);
 
-    if (score) { delete score; }
-    const auto t1 = std::chrono::steady_clock::now();
-    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    o << ",\"w\":" << w << ",\"h\":" << h << ",\"ms\":" << static_cast<long long>(ms + 0.5);
-    if (ok) { o.seekp(0); }
-    std::string json = ok
-        ? ("{\"ok\":true,\"w\":" + std::to_string(w) + ",\"h\":" + std::to_string(h)
-           + ",\"ms\":" + std::to_string(static_cast<long long>(ms + 0.5)) + "}")
-        : o.str() + "}";
     napi_value result;
+    std::string json = o.str();
     napi_create_string_utf8(env, json.data(), json.size(), &result);
+    return result;
+}
+
+
+static napi_value EngineInfo(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    napi_value result;
+    napi_create_string_utf8(env,
+                            "msoh native: mscore4 engraving engine (open/render-view, persistent handles) + zip reader",
+                            NAPI_AUTO_LENGTH, &result);
     return result;
 }
 
@@ -855,7 +812,7 @@ static napi_value EngineFontSmoke(napi_env env, napi_callback_info info)
     auto readStr = [&](napi_value v) {
         size_t len = 0;
         napi_get_value_string_utf8(env, v, nullptr, 0, &len);
-        std::string s(len, ' ');
+        std::string s(len, '\0');
         napi_get_value_string_utf8(env, v, s.data(), len + 1, &len);
         return s;
     };
@@ -923,8 +880,8 @@ static napi_value EngineInit(napi_env env, napi_value exports)
     napi_property_descriptor desc[] = {
         { "engineInfo", nullptr, EngineInfo, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "engineSetup", nullptr, EngineSetup, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "engineLoadMeta", nullptr, EngineLoadMeta, nullptr, nullptr, nullptr, napi_default, nullptr },
-        { "engineRenderPage", nullptr, EngineRenderPage, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "engineOpenScore", nullptr, EngineOpenScore, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "engineRenderView", nullptr, EngineRenderView, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "engineFontSmoke", nullptr, EngineFontSmoke, nullptr, nullptr, nullptr, napi_default, nullptr },
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);

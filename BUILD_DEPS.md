@@ -11,7 +11,7 @@
 │         │                          │                                        │
 │         ▼                          ▼                                        │
 │   ┌─────────────────┐    ┌──────────────────────┐                          │
-│   │  libmsoh.so     │    │  libmsohengine.so     │                         │
+│   │  libmsohengine.so    │                                              │
 │   │  (过渡层)       │    │  (MS4 引擎入口)       │                          │
 │   │  zip_reader     │    │  mscore_engine.cpp    │                          │
 │   │  mscz_meta      │    │  + qrc_engraving.cpp  │                         │
@@ -90,8 +90,6 @@
 ═══════════════════════════════════════════════════════════════════════════
  关键路径(两个 .so 的完整依赖链):
 
- libmsoh.so ──▶ OHOS NDK(libace_napi.z.so + libz.so)          [独立,无 Qt]
-
  libmsohengine.so
    ├──▶ libengraving_cross.a
    │      ├──▶ .deps/MuseScore/src/engraving(编译进 .a)
@@ -116,14 +114,13 @@
 | 图中节点 | 磁盘路径(均在仓库内,可用 `MSOH_DEPS_ROOT` 外移) |
 |---|---|
 | entry | `musescore-oh/entry/` |
-| libmsoh 源码 | `entry/src/main/cpp/`(只读旧目录,由 cpp-engine/CMakeLists 引用) |
-| libmsohengine 源码 | `entry/src/main/cpp-engine/` |
+| libmsohengine 源码 | `entry/src/main/cpp/` |
 | libengraving_cross.a | `build-engraving/arm64-v8a/` 与 `build-engraving/x86_64/` |
-| engraving-cross CMake | `entry/src/main/cpp-engine/engraving/CMakeLists.txt`(`-DOHOS_ARCH` 切换) |
+| engraving-cross CMake | `entry/src/main/cpp/engraving/CMakeLists.txt`(`-DOHOS_ARCH` 切换) |
 | MuseScore 源码 | `.deps/MuseScore/src/engraving` + `.deps/MuseScore/muse/`(framework) |
 | 三方库 | `.deps/msoh-deps/`(freetype/harfbuzz/msdfgen/pugixml/picojson/utfcpp/lodepng/node-addon-api) |
 | Qt arm64 套件 | `.deps/qt-ohos-kit/`(官方 harmonyos_arm64_v8a 组件 + qtdeclarative + qtsvg) |
 | Qt x86_64 套件 | `.deps/qt-x64-kit/build-x64/`(自动源码自编 qtbase + qtsvg) |
 | Qt 宿主套件 | `.deps/qt-host-kit/`(mingw 构建,供 moc/rcc/qmake;bin/ 内含 mingw 运行时 DLL) |
 | hap 预编译 .so | `entry/libs/{arm64-v8a,x86_64}/`(hvigor 打包认这个目录,src/main/libs 不进 hap) |
-| rcc 生成的资源 cpp | `entry/src/main/cpp-engine/generated/qrc_*.cpp`(15 个文件) |
+| rcc 生成的资源 cpp | `entry/src/main/cpp/generated/qrc_*.cpp`(15 个文件) |

@@ -7,7 +7,7 @@
       }
     },
     "externalNativeOptions": {
-      "path": "./src/main/cpp-engine/CMakeLists.txt",
+      "path": "./src/main/cpp/CMakeLists.txt",
       "arguments": "",
       "cppFlags": "",
       "abiFilters": [
