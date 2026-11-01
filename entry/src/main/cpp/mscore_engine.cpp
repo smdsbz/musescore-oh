@@ -46,8 +46,8 @@
 #include "engraving/dom/page.h"
 #include "engraving/dom/sig.h"
 #include "engraving/dom/staff.h"
-#include "engraving/engravingmodule.h"
 #include "engraving/infrastructure/smufl.h"
+#include "engraving/engravingmodule.h"
 #include "engraving/dom/stafftype.h"
 #include "engraving/internal/engravingconfiguration.h"
 #include "engraving/style/defaultstyle.h"
@@ -108,6 +108,17 @@ std::string FormatMscVersion(int v)
     o << (v / 100) << '.' << std::setw(2) << std::setfill('0') << (v % 100);
     return o.str();
 }
+
+// Written key signature accidentals of the view's first staff at tick 0
+// (what the page displays there); 0 = no accidentals.
+int InitialKeySigAccidentals(const mu::engraving::Score* view)
+{
+    if (view == nullptr || view->nstaves() == 0) {
+        return 0;
+    }
+    return static_cast<int>(view->staff(0)->key(mu::engraving::Fraction(0, 1)));
+}
+
 
 } // namespace
 
@@ -636,10 +647,14 @@ static napi_value EngineOpenScore(napi_env env, napi_callback_info info)
             if (i > 0) {
                 parts << ",";
             }
+            const int instruments = ps ? static_cast<int>(ps->parts().size())
+                                       : static_cast<int>(ex->parts().size());
             parts << "{\"name\":\"" << JsonEscape(ToStd(ex->name())) << "\""
                   << ",\"staves\":" << (ps ? ps->nstaves() : 0)
                   << ",\"measures\":" << (ps ? ps->nmeasures() : 0)
                   << ",\"pages\":" << (ps ? ps->pages().size() : 0)
+                  << ",\"instruments\":" << instruments
+                  << ",\"keySig\":" << InitialKeySigAccidentals(ps)
                   << "}";
         }
 
@@ -666,6 +681,7 @@ static napi_value EngineOpenScore(napi_env env, napi_callback_info info)
           << ",\"timeSig\":\"" << JsonEscape(timeSig) << "\""
           << ",\"keySig\":\"" << JsonEscape(keySig) << "\""
           << ",\"keySigAccidentals\":" << keyAcc
+          << ",\"instruments\":" << score->parts().size()
           << ",\"parts\":[" << parts.str() << "]"
           << ",\"parseMillis\":" << static_cast<long long>(ms + 0.5)
           << "}";

@@ -7,6 +7,8 @@ export interface PartInfo {
   staves: number;
   measures: number;
   pages: number;
+  instruments: number;
+  keySig: number;
 }
 
 export interface ScoreMetaInfo {
@@ -21,6 +23,8 @@ export interface ScoreMetaInfo {
   pageCount: number;
   timeSig: string;
   keySig: string;
+  keySigAccidentals: number;
+  instruments: number;
   parts: PartInfo[];
   parseMillis: number;
 }
@@ -61,7 +65,9 @@ function openScoreTask(bytes: Uint8Array, tempDir: string): OpenResult {
         name: recStr(pr, 'name'),
         staves: recNum(pr, 'staves'),
         measures: recNum(pr, 'measures'),
-        pages: recNum(pr, 'pages')
+        pages: recNum(pr, 'pages'),
+        instruments: recNum(pr, 'instruments'),
+        keySig: recNum(pr, 'keySig')
       };
       parts.push(item);
     }
@@ -78,6 +84,8 @@ function openScoreTask(bytes: Uint8Array, tempDir: string): OpenResult {
     pageCount: recNum(rec, 'pageCount'),
     timeSig: recStr(rec, 'timeSig'),
     keySig: recStr(rec, 'keySig'),
+    keySigAccidentals: recNum(rec, 'keySigAccidentals'),
+    instruments: recNum(rec, 'instruments'),
     parts: parts,
     parseMillis: recNum(rec, 'parseMillis')
   };

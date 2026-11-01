@@ -15,6 +15,11 @@ const RENDER_DPI: number = 150;
 const TITLE_INSET_LOCAL: number = 108;
 /** openMenu 锚点 id：标题栏右下角的隐形锚点，菜单从其下方展开 */
 const MENU_ANCHOR_ID: string = 'partMenuAnchor';
+/** 调号→调性文本（大调/关系小调），下标 = 升降数 + 7 */
+const KEY_TONALITIES: string[] = [
+  'CbM/Abm', 'GbM/Ebm', 'DbM/Bbm', 'AbM/Fm', 'EbM/Cm', 'BbM/Gm', 'FM/Dm', 'CM/Am',
+  'GM/Em', 'DM/Bm', 'AM/F#m', 'EM/C#m', 'BM/G#m', 'F#M/D#m', 'C#M/A#m'
+];
 
 export interface ScoreViewParams {
   fileName: string;
@@ -153,6 +158,30 @@ export struct ScoreView {
     return this.meta.parts[viewIndex].name;
   }
 
+  /** 当前视角的记谱调号升降数；非单乐器视角返回 null */
+  private viewKeySigAccidentals(): number | null {
+    if (this.meta === null) {
+      return null;
+    }
+    if (this.viewIndex >= 0) {
+      if (this.viewIndex >= this.meta.parts.length) {
+        return null;
+      }
+      const p = this.meta.parts[this.viewIndex];
+      return p.instruments === 1 ? p.keySig : null;
+    }
+    return this.meta.instruments === 1 ? this.meta.keySigAccidentals : null;
+  }
+
+  /** 调号/调性文本（大调/关系小调，如 "CM/Am"）；非单乐器视角返回 '' */
+  private keyTonalities(): string {
+    const n = this.viewKeySigAccidentals();
+    if (n === null || n < -7 || n > 7) {
+      return '';
+    }
+    return KEY_TONALITIES[n + 7];
+  }
+
   private selectView(viewIndex: number): void {
     if (viewIndex === this.viewIndex || this.loading) {
       return;
@@ -160,12 +189,28 @@ export struct ScoreView {
     this.showView(viewIndex, this.runSeq);
   }
 
-  /** 标题栏菜单项：有分谱时为「当前视角」按钮（点击弹下拉）；无分谱则空 */
+  /** 标题栏菜单项：单乐器视角时最左侧为调号/调性按钮；有分谱时其后为「当前视角」按钮 */
   private partMenuItems(): Array<HdsNavigationMenuItemOptions> {
-    if (this.parts.length < 2) {
-      return [];
+    const items: Array<HdsNavigationMenuItemOptions> = [];
+    const tonality = this.keyTonalities();
+    if (tonality !== '') {
+      items.push({
+        content: {
+          label: tonality,
+          type: TextStyleMode.NORMAL,
+          isEnabled: !this.loading,
+          action: (): void => {
+            if (this.parts.length >= 2) {
+              this.openPartMenu();
+            }
+          }
+        }
+      });
     }
-    const item: HdsNavigationMenuItemOptions = {
+    if (this.parts.length < 2) {
+      return items;
+    }
+    items.push({
       content: {
         label: this.partName(this.viewIndex),
         type: TextStyleMode.NORMAL,
@@ -174,8 +219,8 @@ export struct ScoreView {
           this.openPartMenu();
         }
       }
-    };
-    return [item];
+    });
+    return items;
   }
 
   /** 标题栏菜单项触发：openMenu 全局菜单锚定在标题栏右下角的隐形锚点上 */
