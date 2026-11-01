@@ -27,6 +27,21 @@ export default class EntryAbility extends UIAbility {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+    this.stashOpenFileWant(want);
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onNewWant');
+    this.stashOpenFileWant(want);
+  }
+
+  /** 「打开方式」传入的文件 URI 暂存到 AppStorage，由主页导入曲谱库后打开 */
+  private stashOpenFileWant(want: Want): void {
+    const uri = want.uri ?? '';
+    if (uri.length > 0) {
+      AppStorage.setOrCreate('msohPendingOpenUri', uri);
+      hilog.info(DOMAIN, 'testTag', 'stashed open-file uri');
+    }
   }
 
   onDestroy(): void {

@@ -31,6 +31,29 @@
             "actions": [
               "ohos.want.action.home"
             ]
+          },
+          {
+            "actions": [
+              "ohos.want.action.viewData"
+            ],
+            "uris": [
+              {
+                "scheme": "file",
+                "type": "com.example.musescoreoh.mscz",
+                "utd": "com.example.musescoreoh.mscz",
+                "linkFeature": "FileOpen"
+              },
+              {
+                "scheme": "file",
+                "pathRegex": ".*\\.mscz",
+                "linkFeature": "FileOpen"
+              },
+              {
+                "scheme": "file",
+                "type": "application/octet-stream",
+                "linkFeature": "FileOpen"
+              }
+            ]
           }
         ]
       }

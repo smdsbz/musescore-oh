@@ -1,0 +1,12 @@
+{
+  "UniformDataTypeDeclarations": [
+    {
+      "TypeId": "com.example.musescoreoh.mscz",
+      "BelongingToTypes": ["general.zip-archive"],
+      "FilenameExtensions": [".mscz"],
+      "MIMETypes": ["application/x-musescore"],
+      "Description": "MuseScore score file",
+      "ReferenceURL": "https://musescore.org"
+    }
+  ]
+}

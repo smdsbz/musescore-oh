@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { picker } from '@kit.CoreFileKit';
+import { picker, fileUri } from '@kit.CoreFileKit';
 import bundleManager from '@ohos.bundle.bundleManager';
 import deviceInfo from '@ohos.deviceInfo';
 import {
@@ -47,6 +47,8 @@ struct Index {
   @State publicPath: string = '';
   @State seeding: boolean = false;
   @State importing: boolean = false;
+  /** 「打开方式」传入的文件 URI（EntryAbility 暂存，热启动时 @Watch 触发处理） */
+  @StorageLink('msohPendingOpenUri') @Watch('onPendingOpenUri') pendingOpenUri: string = '';
   private scroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
@@ -79,6 +81,37 @@ struct Index {
         console.info(`MSOH engine setup failed: ${JSON.stringify(e)}`);
       }
     this.refresh();
+    this.consumePendingOpenUri();
+  }
+
+  private onPendingOpenUri(): void {
+    this.consumePendingOpenUri();
+  }
+
+  /** 处理「打开方式」传入的文件：复制进曲谱库（已在库内则免复制）后直接打开 */
+  private async consumePendingOpenUri(): Promise<void> {
+    const uri = this.pendingOpenUri;
+    if (uri.length === 0) {
+      return;
+    }
+    this.pendingOpenUri = '';
+    const fileName = (new fileUri.FileUri(uri).path ?? '').split('/').pop() ?? '';
+    if (!fileName.toLowerCase().endsWith('.mscz')) {
+      // 兜底声明了 octet-stream，可能收到非曲谱文件
+      this.getUIContext().getPromptAction().showToast({ message: '仅支持打开 .mscz 曲谱文件', duration: 2000 });
+      return;
+    }
+    const r = await ScoreLibrary.importFromUris([uri]);
+    if (r.copied === 0 && r.alreadyInLibrary === 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '打开曲谱文件失败', duration: 2000 });
+      return;
+    }
+    if (r.copied > 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '已导入曲谱库', duration: 2000 });
+      await this.refresh();
+    }
+    const params: ScoreViewParams = { fileName };
+    this.pathStack.pushPathByName('ScoreView', params);
   }
 
   async refresh(): Promise<void> {
