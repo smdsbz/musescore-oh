@@ -40,8 +40,8 @@ export class ScoreLibrary {
       return false;
     }
     try {
-      if (!fileIo.accessSync(ScoreLibrary.rootPath)) {
-        fileIo.mkdirSync(ScoreLibrary.rootPath);
+      if (!await fileIo.access(ScoreLibrary.rootPath)) {
+        await fileIo.mkdir(ScoreLibrary.rootPath);
       }
       return true;
     } catch (e) {
@@ -58,7 +58,7 @@ export class ScoreLibrary {
     }
     let names: string[] = [];
     try {
-      names = fileIo.listFileSync(ScoreLibrary.rootPath);
+      names = await fileIo.listFile(ScoreLibrary.rootPath);
     } catch (e) {
       console.info(`MSOH ScoreLibrary listFile failed: ${JSON.stringify(e)}`);
       return entries;
@@ -68,7 +68,7 @@ export class ScoreLibrary {
         continue;
       }
       try {
-        const st = fileIo.statSync(`${ScoreLibrary.rootPath}/${n}`);
+        const st = await fileIo.stat(`${ScoreLibrary.rootPath}/${n}`);
         const entry: ScoreFileEntry = {
           fileName: n,
           displayName: n.substring(0, n.length - 5),
@@ -85,14 +85,14 @@ export class ScoreLibrary {
   }
 
   static async readBytes(fileName: string): Promise<Uint8Array> {
-    const file = fileIo.openSync(`${ScoreLibrary.rootPath}/${fileName}`, fileIo.OpenMode.READ_ONLY);
+    const file = await fileIo.open(`${ScoreLibrary.rootPath}/${fileName}`, fileIo.OpenMode.READ_ONLY);
     try {
-      const st = fileIo.statSync(file.fd);
+      const st = await fileIo.stat(file.fd);
       const buf = new ArrayBuffer(st.size);
       const view = new Uint8Array(buf);
       let got = 0;
       while (got < st.size) {
-        const n = fileIo.readSync(file.fd, buf, { offset: got, length: st.size - got });
+        const n = await fileIo.read(file.fd, buf, { offset: got, length: st.size - got });
         if (n <= 0) {
           break;
         }
@@ -100,7 +100,7 @@ export class ScoreLibrary {
       }
       return got === st.size ? view : view.subarray(0, got);
     } finally {
-      fileIo.closeSync(file.fd);
+      await fileIo.close(file.fd);
     }
   }
 
@@ -125,11 +125,12 @@ export class ScoreLibrary {
       const dest = `${ScoreLibrary.rootPath}/${n}`;
       try {
         const bytes: Uint8Array = await ctx.resourceManager.getRawFileContent(n);
-        const file = fileIo.openSync(dest, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
+        const file = await fileIo.open(dest,
+          fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
         try {
-          fileIo.writeSync(file.fd, bytes.buffer);
+          await fileIo.write(file.fd, bytes.buffer);
         } finally {
-          fileIo.closeSync(file.fd);
+          await fileIo.close(file.fd);
         }
         copied++;
       } catch (e) {
