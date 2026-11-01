@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { picker } from '@kit.CoreFileKit';
 import bundleManager from '@ohos.bundle.bundleManager';
 import deviceInfo from '@ohos.deviceInfo';
 import {
@@ -45,6 +46,7 @@ struct Index {
   @State errorMsg: string = '';
   @State publicPath: string = '';
   @State seeding: boolean = false;
+  @State importing: boolean = false;
   private scroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
@@ -102,6 +104,42 @@ struct Index {
       fileName: item.entry.fileName
     };
     this.pathStack.pushPathByName('ScoreView', params);
+  }
+
+  /** 文件选择器导入：复制进公共下载目录后刷新列表（用户取消选择器则静默返回） */
+  private async pickAndImport(): Promise<void> {
+    if (this.importing) {
+      return;
+    }
+    const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const docPicker = new picker.DocumentViewPicker(ctx);
+    const opts = new picker.DocumentSelectOptions();
+    opts.fileSuffixFilters = ['.mscz'];
+    opts.maxSelectNumber = 50;
+    let uris: string[] = [];
+    try {
+      uris = await docPicker.select(opts);
+    } catch (e) {
+      console.info(`MSOH ${TAG} picker cancelled or failed: ${JSON.stringify(e)}`);
+      return;
+    }
+    if (uris.length === 0) {
+      return;
+    }
+    this.importing = true;
+    try {
+      const r = await ScoreLibrary.importFromUris(uris);
+      if (r.copied > 0) {
+        this.getUIContext().getPromptAction().showToast({ message: `已导入 ${r.copied} 份曲谱`, duration: 2000 });
+        await this.refresh();
+      } else if (r.alreadyInLibrary > 0) {
+        this.getUIContext().getPromptAction().showToast({ message: '所选曲谱已在曲谱库内', duration: 2000 });
+      } else {
+        this.getUIContext().getPromptAction().showToast({ message: '未能导入所选文件', duration: 2000 });
+      }
+    } finally {
+      this.importing = false;
+    }
   }
 
   /** 把内置示例曲谱复制进公共下载目录（rawfile 未打包样本时提示） */
@@ -190,6 +228,14 @@ struct Index {
         menu: {
           value: [{
             content: {
+              label: '导入',
+              type: TextStyleMode.NORMAL,
+              action: (): void => {
+                this.pickAndImport();
+              }
+            }
+          }, {
+            content: {
               label: '刷新',
               type: TextStyleMode.NORMAL,
               action: (): void => {
@@ -263,7 +309,7 @@ struct Index {
         .lineHeight(22)
         .padding({ left: 24, right: 24 })
 
-      Text('放入文件后回到本应用，点右上角「刷新」。')
+      Text('放入文件后回到本应用，点右上角「刷新」；\n或直接点右上角「导入」，从文件管理器选择 .mscz 文件。')
         .fontSize(13)
         .fontColor($r('sys.color.font_tertiary'))
 

@@ -9,6 +9,12 @@ export interface ScoreFileEntry {
   mtime: number;
 }
 
+export interface ImportResult {
+  copied: number;
+  /** 源就在公共下载目录本应用子目录内（无需复制）的份数 */
+  alreadyInLibrary: number;
+}
+
 /**
  * 公共下载目录数据源：Download/<bundleName>/。
  * 应用对以自己包名命名的下载子目录有直接读写权限（无需任何授权），
@@ -102,6 +108,40 @@ export class ScoreLibrary {
     } finally {
       await fileIo.close(file.fd);
     }
+  }
+
+  /**
+   * 把文件选择器返回的 URI 复制进公共下载目录（同名覆盖，已在库内的跳过）。
+   */
+  static async importFromUris(uris: string[]): Promise<ImportResult> {
+    const res: ImportResult = { copied: 0, alreadyInLibrary: 0 };
+    if (ScoreLibrary.rootPath === '') {
+      return res;
+    }
+    for (const uri of uris) {
+      let name = '';
+      try {
+        const srcPath = new fileUri.FileUri(uri).path ?? '';
+        name = srcPath.split('/').pop() ?? '';
+        if (name === '' || !name.toLowerCase().endsWith('.mscz')) {
+          continue;
+        }
+        if (srcPath.startsWith(`${ScoreLibrary.rootPath}/`)) {
+          res.alreadyInLibrary++;
+          continue;
+        }
+        const src = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
+        try {
+          await fileIo.copyFile(src.fd, `${ScoreLibrary.rootPath}/${name}`);
+        } finally {
+          await fileIo.close(src.fd);
+        }
+        res.copied++;
+      } catch (e) {
+        console.info(`MSOH ScoreLibrary import skip ${name}: ${JSON.stringify(e)}`);
+      }
+    }
+    return res;
   }
 
   /** 把 rawfile 内置示例曲谱复制进公共下载目录（已存在的同名文件跳过） */
