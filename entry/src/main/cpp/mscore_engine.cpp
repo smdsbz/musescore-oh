@@ -37,6 +37,14 @@
 #include "engraving/dom/instrtemplate.h"
 #include "engraving/dom/masterscore.h"
 #include "engraving/dom/excerpt.h"
+#include "engraving/editing/transpose.h"
+#include "engraving/editing/editkeysig.h"
+#include "engraving/dom/key.h"
+#include "engraving/dom/measure.h"
+#include "engraving/dom/segment.h"
+#include "engraving/dom/keysig.h"
+#include "engraving/dom/part.h"
+#include "engraving/editing/transaction/transaction.h"
 #include "engraving/rendering/score/paint.h"
 #include "engraving/dom/mscore.h"
 #include "engraving/dom/box.h"
@@ -649,12 +657,16 @@ static napi_value EngineOpenScore(napi_env env, napi_callback_info info)
             }
             const int instruments = ps ? static_cast<int>(ps->parts().size())
                                        : static_cast<int>(ex->parts().size());
+            const int prefer = ps && ps->nstaves() > 0
+                ? static_cast<int>(ps->staff(0)->part()->preferSharpFlat())
+                : 3;
             parts << "{\"name\":\"" << JsonEscape(ToStd(ex->name())) << "\""
                   << ",\"staves\":" << (ps ? ps->nstaves() : 0)
                   << ",\"measures\":" << (ps ? ps->nmeasures() : 0)
                   << ",\"pages\":" << (ps ? ps->pages().size() : 0)
                   << ",\"instruments\":" << instruments
                   << ",\"keySig\":" << InitialKeySigAccidentals(ps)
+                  << ",\"prefer\":" << prefer
                   << "}";
         }
 
@@ -682,6 +694,8 @@ static napi_value EngineOpenScore(napi_env env, napi_callback_info info)
           << ",\"keySig\":\"" << JsonEscape(keySig) << "\""
           << ",\"keySigAccidentals\":" << keyAcc
           << ",\"instruments\":" << score->parts().size()
+          << ",\"prefer\":" << (score->nstaves() > 0
+              ? static_cast<int>(score->staff(0)->part()->preferSharpFlat()) : 3)
           << ",\"parts\":[" << parts.str() << "]"
           << ",\"parseMillis\":" << static_cast<long long>(ms + 0.5)
           << "}";
@@ -804,6 +818,111 @@ static napi_value EngineRenderView(napi_env env, napi_callback_info info)
 }
 
 
+// Interval::allIntervals is an interval-ordinal table, not semitones
+// (index 2 = diminished 2nd = 0 chromatic). Map a chromatic step count to the
+// table index of its plain interval (smallest diatonic degree).
+static int IntervalIndexForSemitones(int chromatic)
+{
+    int best = -1;
+    int bestDia = 99;
+    for (int i = 0; i < static_cast<int>(mu::engraving::Interval::allIntervals.size()); ++i) {
+        const auto& iv = mu::engraving::Interval::allIntervals[i];
+        if (iv.chromatic == chromatic && iv.diatonic < bestDia) {
+            best = i;
+            bestDia = iv.diatonic;
+        }
+    }
+    return best;
+}
+
+// args: handle(int), viewIndex(int), semitones(int)
+// Transposes the whole view (all notes + key signatures + chord symbols) by
+// the given number of semitones (-24..+24), relayouts, returns the new
+// written key signature of staff 0.
+static napi_value EngineTransposeView(napi_env env, napi_callback_info info)
+{
+    size_t argc = 3;
+    napi_value argv[3] = { nullptr, nullptr, nullptr };
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    if (argc < 3) {
+        napi_throw_type_error(env, nullptr,
+                              "engineTransposeView(handle: number, viewIndex: number, semitones: number)");
+        return nullptr;
+    }
+    int32_t handle = 0;
+    int32_t viewIndex = -1;
+    int32_t semitones = 0;
+    napi_get_value_int32(env, argv[0], &handle);
+    napi_get_value_int32(env, argv[1], &viewIndex);
+    napi_get_value_int32(env, argv[2], &semitones);
+
+    EnsureEngineEnv();
+
+    std::ostringstream o;
+    mu::engraving::MasterScore* master = ScoreByHandle(handle);
+    mu::engraving::Score* view = nullptr;
+    do {
+        if (semitones == 0 || semitones < -24 || semitones > 24) {
+            o << "{\"ok\":false,\"error\":\"semitones out of range\"}";
+            break;
+        }
+        if (master == nullptr) {
+            o << "{\"ok\":false,\"error\":\"invalid handle\"}";
+            break;
+        }
+        if (viewIndex < 0) {
+            view = master;
+        } else {
+            const auto& exs = master->excerpts();
+            if (viewIndex >= static_cast<int>(exs.size())) {
+                o << "{\"ok\":false,\"error\":\"invalid viewIndex\"}";
+                break;
+            }
+            view = exs.at(viewIndex)->excerptScore();
+            if (view == nullptr) {
+                o << "{\"ok\":false,\"error\":\"excerpt has no score\"}";
+                break;
+            }
+        }
+
+        int steps = std::abs(semitones);
+        const mu::engraving::TransposeDirection dir = semitones > 0
+            ? mu::engraving::TransposeDirection::UP
+            : mu::engraving::TransposeDirection::DOWN;
+        view->cmdSelectAll();
+        bool ok = false;
+        view->transactionManager()->transaction(
+            muse::TranslatableString::untranslatable("msoh transpose"),
+            [&](mu::engraving::Transaction& tx) {
+                ok = true;
+                while (ok && steps > 0) {
+                    const int chunk = steps > 13 ? 12 : steps;
+                    const int idx = IntervalIndexForSemitones(chunk);
+                    if (idx < 0) {
+                        ok = false;
+                        break;
+                    }
+                    ok = mu::engraving::Transpose::transpose(
+                        tx, view, mu::engraving::TransposeMode::BY_INTERVAL, dir,
+                        mu::engraving::Key::C, idx, true, true, false);
+                    steps -= chunk;
+                }
+            });
+        if (!ok) {
+            o << "{\"ok\":false,\"error\":\"transpose failed\"}";
+            break;
+        }
+        view->doLayout();
+        o << "{\"ok\":true,\"keySig\":" << InitialKeySigAccidentals(view) << "}";
+    } while (false);
+
+    napi_value result;
+    std::string json = o.str();
+    napi_create_string_utf8(env, json.data(), json.size(), &result);
+    return result;
+}
+
+
 static napi_value EngineInfo(napi_env env, napi_callback_info info)
 {
     (void)info;
@@ -898,6 +1017,7 @@ static napi_value EngineInit(napi_env env, napi_value exports)
         { "engineSetup", nullptr, EngineSetup, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "engineOpenScore", nullptr, EngineOpenScore, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "engineRenderView", nullptr, EngineRenderView, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "engineTransposeView", nullptr, EngineTransposeView, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "engineFontSmoke", nullptr, EngineFontSmoke, nullptr, nullptr, nullptr, napi_default, nullptr },
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);

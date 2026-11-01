@@ -1,5 +1,5 @@
 import { taskpool } from '@kit.ArkTS';
-import { engineOpenScore, engineRenderView } from 'libmsohengine.so';
+import { engineOpenScore, engineRenderView, engineTransposeView } from 'libmsohengine.so';
 import { recStr, recNum } from './JsonRec';
 
 export interface PartInfo {
@@ -9,6 +9,7 @@ export interface PartInfo {
   pages: number;
   instruments: number;
   keySig: number;
+  prefer: number;
 }
 
 export interface ScoreMetaInfo {
@@ -25,6 +26,7 @@ export interface ScoreMetaInfo {
   keySig: string;
   keySigAccidentals: number;
   instruments: number;
+  prefer: number;
   parts: PartInfo[];
   parseMillis: number;
 }
@@ -48,6 +50,12 @@ export interface RenderResult {
   ms: number;
 }
 
+export interface TransposeResult {
+  ok: boolean;
+  error: string;
+  keySig: number;
+}
+
 @Concurrent
 function openScoreTask(bytes: Uint8Array, tempDir: string): OpenResult {
   const rec: Record<string, Object> = JSON.parse(engineOpenScore(bytes, tempDir)) as Record<string, Object>;
@@ -67,7 +75,8 @@ function openScoreTask(bytes: Uint8Array, tempDir: string): OpenResult {
         measures: recNum(pr, 'measures'),
         pages: recNum(pr, 'pages'),
         instruments: recNum(pr, 'instruments'),
-        keySig: recNum(pr, 'keySig')
+        keySig: recNum(pr, 'keySig'),
+        prefer: recNum(pr, 'prefer')
       };
       parts.push(item);
     }
@@ -86,6 +95,7 @@ function openScoreTask(bytes: Uint8Array, tempDir: string): OpenResult {
     keySig: recStr(rec, 'keySig'),
     keySigAccidentals: recNum(rec, 'keySigAccidentals'),
     instruments: recNum(rec, 'instruments'),
+    prefer: recNum(rec, 'prefer'),
     parts: parts,
     parseMillis: recNum(rec, 'parseMillis')
   };
@@ -115,6 +125,20 @@ function renderViewTask(handle: number, viewIndex: number, outDir: string, dpi: 
   return result;
 }
 
+@Concurrent
+function transposeViewTask(handle: number, viewIndex: number, semitones: number): TransposeResult {
+  const rec: Record<string, Object> = JSON.parse(engineTransposeView(handle, viewIndex, semitones)) as Record<string, Object>;
+  const result: TransposeResult = { ok: false, error: '', keySig: 0 };
+  if (rec['ok'] !== true) {
+    result.error = recStr(rec, 'error') !== '' ? recStr(rec, 'error') : '移调失败';
+    return result;
+  }
+  result.ok = true;
+  result.keySig = recNum(rec, 'keySig');
+  return result;
+}
+
+
 /**
  * 引擎客户端：open/renderView 均在 taskpool 执行，并用串行队列保证
  * 同一时刻只有一个 native 引擎调用（引擎非线程安全，且跨 worker 线程
@@ -140,6 +164,13 @@ export class ScoreEngine {
     return ScoreEngine.run(async (): Promise<RenderResult> => {
       const task: taskpool.Task = new taskpool.Task(renderViewTask, handle, viewIndex, outDir, dpi);
       return await taskpool.execute(task) as RenderResult;
+    });
+  }
+
+  static transposeView(handle: number, viewIndex: number, semitones: number): Promise<TransposeResult> {
+    return ScoreEngine.run(async (): Promise<TransposeResult> => {
+      const task: taskpool.Task = new taskpool.Task(transposeViewTask, handle, viewIndex, semitones);
+      return await taskpool.execute(task) as TransposeResult;
     });
   }
 }

@@ -21,6 +21,124 @@ const KEY_TONALITIES: string[] = [
   'GM/Em', 'DM/Bm', 'AM/F#m', 'EM/C#m', 'BM/G#m', 'F#M/D#m', 'C#M/A#m'
 ];
 
+/**
+ * 移调后的 fifths：k 满足 7k≡semitones (mod 12)，再按引擎 clampKey 同款
+ * 升降号偏好折回（prefer：0/3=NONE/AUTO→[-6,6]，1=SHARPS→[-4,7]，2=FLATS→[-7,4]）
+ */
+export function transposedKeySigOf(base: number, semitones: number, prefer: number): number {
+  if (semitones === 0) {
+    return base;
+  }
+  const k = (((semitones % 12) + 12) % 12) * 7 % 12;
+  let f = base + k;
+  const smallest = prefer === 1 ? -4 : -7;
+  const largest = prefer === 2 ? 4 : (prefer === 1 ? 7 : 6);
+  while (f < smallest) {
+    f += 12;
+  }
+  while (f > largest) {
+    f -= 12;
+  }
+  return f;
+}
+
+@CustomDialog
+struct TransposeDialog {
+  controller?: CustomDialogController;
+  @Link semitones: number;
+  /** 打开对话框时已应用的总移调量（相对初始调性），确认仅在变化时可用 */
+  @Link baseSemitones: number;
+  @Link original: string;
+  @Link baseKeySig: number;
+  @Link prefer: number;
+  onConfirmed: (semitones: number) => void = () => {
+  };
+
+  private transposedLabel(): string {
+    const f = transposedKeySigOf(this.baseKeySig, this.semitones, this.prefer);
+    return KEY_TONALITIES[f + 7];
+  }
+
+  private stepLabel(): string {
+    if (this.semitones === 0) {
+      return '未移调';
+    }
+    return `${this.semitones > 0 ? '上移' : '下移'} ${Math.abs(this.semitones)} 个半音`;
+  }
+
+  build() {
+    Column({ space: 24 }) {
+      Column({ space: 4 }) {
+        Text(this.original)
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('sys.color.font_primary'))
+        Text('初始调性')
+          .fontSize(12)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
+      .alignItems(HorizontalAlign.Center)
+
+      Row({ space: 16 }) {
+        Button('−')
+          .fontSize(26)
+          .fontWeight(FontWeight.Bold)
+          .width(48)
+          .height(48)
+          .borderRadius(24)
+          .buttonStyle(ButtonStyleMode.NORMAL)
+          .enabled(this.semitones > -24)
+          .onClick(() => {
+            this.semitones -= 1;
+          })
+        Column({ space: 2 }) {
+          Text(this.transposedLabel())
+            .fontSize(20)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('sys.color.font_primary'))
+          Text(this.stepLabel())
+            .fontSize(12)
+            .fontColor($r('sys.color.font_tertiary'))
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
+        Button('+')
+          .fontSize(26)
+          .fontWeight(FontWeight.Bold)
+          .width(48)
+          .height(48)
+          .borderRadius(24)
+          .buttonStyle(ButtonStyleMode.NORMAL)
+          .enabled(this.semitones < 24)
+          .onClick(() => {
+            this.semitones += 1;
+          })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Center)
+
+      Row({ space: 12 }) {
+        Button('取消')
+          .layoutWeight(1)
+          .buttonStyle(ButtonStyleMode.NORMAL)
+          .onClick(() => {
+            this.controller?.close();
+          })
+        Button('确认')
+          .layoutWeight(1)
+          .enabled(this.semitones !== this.baseSemitones)
+          .onClick(() => {
+            const s = this.semitones;
+            this.controller?.close();
+            this.onConfirmed(s);
+          })
+      }
+    }
+    .padding(24)
+    .width('100%')
+  }
+}
+
 export interface ScoreViewParams {
   fileName: string;
 }
@@ -67,10 +185,36 @@ export struct ScoreView {
   @State loading: boolean = true;
   @State loadingText: string = '正在打开曲谱…';
   @State errorMsg: string = '';
+  /** 当前视图记谱调号升降数；±7 以外（含多乐器视角的 1000）表示无调性按钮 */
+  @State viewKeySig: number = 1000;
+  /** 各视图（-1=总谱）打开时的初始调号，移调永不改变，作移对话框固定基准 */
+  private initialKeys: Map<number, number> = new Map();
+  /** 各视图相对初始调已应用的总移调量（半音） */
+  private appliedSemis: Map<number, number> = new Map();
+  @State transposeCount: number = 0;
+  @State dialogSemitones: number = 0;
+  @State dialogBaseSemitones: number = 0;
+  @State dialogOriginal: string = '';
+  @State dialogBaseKeySig: number = 0;
+  @State dialogPrefer: number = 3;
   private meta: ScoreMetaInfo | null = null;
   /** 异步令牌：页面 pop 或重复切换后使旧协程结果失效 */
   private runSeq: number = 0;
   private scroller: Scroller = new Scroller();
+  private transposeController: CustomDialogController = new CustomDialogController({
+    builder: TransposeDialog({
+      semitones: this.dialogSemitones,
+      baseSemitones: this.dialogBaseSemitones,
+      original: this.dialogOriginal,
+      baseKeySig: this.dialogBaseKeySig,
+      prefer: this.dialogPrefer,
+      onConfirmed: (semitones: number): void => {
+        this.applyTranspose(semitones);
+      }
+    }),
+    autoCancel: true,
+    alignment: DialogAlignment.Center
+  });
 
   aboutToAppear(): void {
     this.title = this.fileName.replace(/\.mscz$/i, '');
@@ -105,6 +249,14 @@ export struct ScoreView {
         views.push({ name: open.meta.parts[i].name, index: i });
       }
       this.parts = views;
+      this.initialKeys.clear();
+      this.appliedSemis.clear();
+      this.initialKeys.set(-1, open.meta.keySigAccidentals);
+      this.appliedSemis.set(-1, 0);
+      for (let i = 0; i < open.meta.parts.length; i++) {
+        this.initialKeys.set(i, open.meta.parts[i].keySig);
+        this.appliedSemis.set(i, 0);
+      }
       console.info(`MSOH ${TAG}: opened [${this.fileName}] title=${open.meta.title} ` +
         `parts=${open.meta.parts.length} pages=${open.meta.pageCount} ${open.meta.parseMillis}ms`);
       await this.showView(-1, seq);
@@ -123,7 +275,7 @@ export struct ScoreView {
     this.pages = [];
     try {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      const outDir = `${ctx.cacheDir}/render/h${this.meta?.handle ?? 0}_v${viewIndex}`;
+      const outDir = `${ctx.cacheDir}/render/h${this.meta?.handle ?? 0}_v${viewIndex}_t${this.transposeCount}`;
       const res = await ScoreEngine.renderView(this.meta?.handle ?? 0, viewIndex, outDir, RENDER_DPI);
       if (seq !== this.runSeq) {
         return;
@@ -139,6 +291,7 @@ export struct ScoreView {
       }
       this.viewIndex = viewIndex;
       this.pages = items;
+      this.viewKeySig = this.computeViewKeySig();
       this.loading = false;
       this.scroller.scrollTo({ xOffset: 0, yOffset: 0 });
       console.info(`MSOH ${TAG}: view=${viewIndex} pages=${items.length} ${res.ms}ms`);
@@ -158,28 +311,87 @@ export struct ScoreView {
     return this.meta.parts[viewIndex].name;
   }
 
-  /** 当前视角的记谱调号升降数；非单乐器视角返回 null */
-  private viewKeySigAccidentals(): number | null {
+  /** 当前视角的记谱调号升降数；非单乐器视角返回 1000 */
+  private computeViewKeySig(): number {
     if (this.meta === null) {
-      return null;
+      return 1000;
     }
     if (this.viewIndex >= 0) {
       if (this.viewIndex >= this.meta.parts.length) {
-        return null;
+        return 1000;
       }
       const p = this.meta.parts[this.viewIndex];
-      return p.instruments === 1 ? p.keySig : null;
+      return p.instruments === 1 ? p.keySig : 1000;
     }
-    return this.meta.instruments === 1 ? this.meta.keySigAccidentals : null;
+    return this.meta.instruments === 1 ? this.meta.keySigAccidentals : 1000;
   }
 
   /** 调号/调性文本（大调/关系小调，如 "CM/Am"）；非单乐器视角返回 '' */
   private keyTonalities(): string {
-    const n = this.viewKeySigAccidentals();
-    if (n === null || n < -7 || n > 7) {
+    const n = this.viewKeySig;
+    if (n < -7 || n > 7) {
       return '';
     }
     return KEY_TONALITIES[n + 7];
+  }
+
+  private openTransposeDialog(): void {
+    if (this.loading || this.viewKeySig < -7 || this.viewKeySig > 7) {
+      return;
+    }
+    const initial = this.initialKeys.get(this.viewIndex);
+    if (initial === undefined || initial < -7 || initial > 7) {
+      return;
+    }
+    this.dialogPrefer = this.viewPrefer();
+    this.dialogBaseKeySig = initial;
+    this.dialogOriginal = KEY_TONALITIES[initial + 7];
+    this.dialogSemitones = this.appliedSemis.get(this.viewIndex) ?? 0;
+    this.dialogBaseSemitones = this.dialogSemitones;
+    this.transposeController.open();
+  }
+
+  private viewPrefer(): number {
+    if (this.meta === null) {
+      return 3;
+    }
+    if (this.viewIndex >= 0 && this.viewIndex < this.meta.parts.length) {
+      return this.meta.parts[this.viewIndex].prefer;
+    }
+    return this.meta.prefer;
+  }
+
+  /** 确认移调：semitones 为相对初始调的总移调量，只对增量部分执行引擎移调 */
+  private async applyTranspose(semitones: number): Promise<void> {
+    if (this.meta === null || this.loading) {
+      return;
+    }
+    const delta = semitones - (this.appliedSemis.get(this.viewIndex) ?? 0);
+    if (delta === 0) {
+      return;
+    }
+    this.loadingText = '正在移调…';
+    this.loading = true;
+    try {
+      const res = await ScoreEngine.transposeView(this.meta.handle, this.viewIndex, delta);
+      if (!res.ok) {
+        this.errorMsg = res.error;
+        this.loading = false;
+        return;
+      }
+      if (this.viewIndex >= 0 && this.viewIndex < this.meta.parts.length) {
+        this.meta.parts[this.viewIndex].keySig = res.keySig;
+      } else {
+        this.meta.keySigAccidentals = res.keySig;
+      }
+      this.viewKeySig = res.keySig;
+      this.appliedSemis.set(this.viewIndex, semitones);
+      this.transposeCount += 1;
+      await this.showView(this.viewIndex, this.runSeq);
+    } catch (e) {
+      this.errorMsg = '移调失败：' + JSON.stringify(e);
+      this.loading = false;
+    }
   }
 
   private selectView(viewIndex: number): void {
@@ -200,9 +412,7 @@ export struct ScoreView {
           type: TextStyleMode.NORMAL,
           isEnabled: !this.loading,
           action: (): void => {
-            if (this.parts.length >= 2) {
-              this.openPartMenu();
-            }
+            this.openTransposeDialog();
           }
         }
       });
