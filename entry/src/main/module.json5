@@ -39,8 +39,8 @@
             "uris": [
               {
                 "scheme": "file",
-                "type": "com.example.musescoreoh.mscz",
-                "utd": "com.example.musescoreoh.mscz",
+                "type": "io.smdsbz.musescoreoh.mscz",
+                "utd": "io.smdsbz.musescoreoh.mscz",
                 "linkFeature": "FileOpen"
               },
               {

@@ -257,7 +257,7 @@ struct Index {
     }
     .titleBar({
       content: {
-        title: { mainTitle: '乐谱' },
+        title: { mainTitle: 'MuseScoreOH' },
         menu: {
           value: [{
             content: {

@@ -7,11 +7,11 @@
         material: {
           certpath: 'C:\\Users\\69406\\.ohos\\config\\default_musescore-oh_tClvOQa4ALh3dHagVGvoXn70Lv52XXajNN2aSM4=.cer',
           keyAlias: 'debugKey',
-          keyPassword: '0000001b6b08b56f06c9ec412946aa4ee024c20d6ae36f23adf4b1b4b375f818c9eb649a8ed32a652d9ef1',
+          keyPassword: '0000001b57b60997867e0132d506878a1e87b10672f38443bda1c4d5a2a84a37fa5606d051cf96eed83a1b',
           profile: 'C:\\Users\\69406\\.ohos\\config\\default_musescore-oh_tClvOQa4ALh3dHagVGvoXn70Lv52XXajNN2aSM4=.p7b',
           signAlg: 'SHA256withECDSA',
           storeFile: 'C:\\Users\\69406\\.ohos\\config\\default_musescore-oh_tClvOQa4ALh3dHagVGvoXn70Lv52XXajNN2aSM4=.p12',
-          storePassword: '0000001b6b08b56f06c9ec412946aa4ee024c20d6ae36f23adf4b1b4b375f818c9eb649a8ed32a652d9ef1',
+          storePassword: '0000001b57b60997867e0132d506878a1e87b10672f38443bda1c4d5a2a84a37fa5606d051cf96eed83a1b',
         },
       },
     ],

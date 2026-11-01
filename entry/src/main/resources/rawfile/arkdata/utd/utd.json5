@@ -1,7 +1,7 @@
 {
   "UniformDataTypeDeclarations": [
     {
-      "TypeId": "com.example.musescoreoh.mscz",
+      "TypeId": "io.smdsbz.musescoreoh.mscz",
       "BelongingToTypes": ["general.zip-archive"],
       "FilenameExtensions": [".mscz"],
       "MIMETypes": ["application/x-musescore"],

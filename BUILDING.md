@@ -32,7 +32,7 @@ bash/Python 脚本或手工步骤(纯 CMake):
 
 ## 曲谱文件放置(应用数据)
 
-应用主页列出公共下载目录 `Download/com.example.musescoreoh/` 下的 `.mscz`
+应用主页列出公共下载目录 `Download/io.smdsbz.musescoreoh/` 下的 `.mscz`
 文件(目录不存在时应用会自建)。把曲谱放进该目录后回到应用点「刷新」即可:
 真机也可用文件管理器直接把 mscz 拷进该目录。
 
