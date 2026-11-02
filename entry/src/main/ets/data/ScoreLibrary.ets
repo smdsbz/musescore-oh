@@ -46,10 +46,12 @@ export class ScoreLibrary {
       return false;
     }
     try {
-      if (!await fileIo.access(ScoreLibrary.rootPath)) {
+      try {
         await fileIo.mkdir(ScoreLibrary.rootPath);
+      } catch (e) {
+        // 目录已存在（含冷启动 refresh 与导入链并发首建的竞争）时 mkdir 抛错，交给下方 access 确认
       }
-      return true;
+      return await fileIo.access(ScoreLibrary.rootPath);
     } catch (e) {
       console.info(`MSOH ScoreLibrary ensureDir failed: ${JSON.stringify(e)}`);
       return false;
@@ -118,6 +120,9 @@ export class ScoreLibrary {
     if (ScoreLibrary.rootPath === '') {
       return res;
     }
+    if (!await ScoreLibrary.ensureDir()) {
+      return res;
+    }
     for (const uri of uris) {
       let name = '';
       try {
@@ -148,6 +153,9 @@ export class ScoreLibrary {
   static async seedBuiltinSamples(): Promise<number> {
     const ctx = ScoreLibrary.ctx;
     if (ctx === null) {
+      return 0;
+    }
+    if (!await ScoreLibrary.ensureDir()) {
       return 0;
     }
     let names: string[] = [];
