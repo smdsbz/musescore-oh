@@ -149,42 +149,4 @@ export class ScoreLibrary {
     return res;
   }
 
-  /** 把 rawfile 内置示例曲谱复制进公共下载目录（已存在的同名文件跳过） */
-  static async seedBuiltinSamples(): Promise<number> {
-    const ctx = ScoreLibrary.ctx;
-    if (ctx === null) {
-      return 0;
-    }
-    if (!await ScoreLibrary.ensureDir()) {
-      return 0;
-    }
-    let names: string[] = [];
-    try {
-      names = await ctx.resourceManager.getRawFileList('');
-    } catch (e) {
-      console.info(`MSOH ScoreLibrary getRawFileList failed: ${JSON.stringify(e)}`);
-      return 0;
-    }
-    let copied = 0;
-    for (const n of names) {
-      if (!n.toLowerCase().endsWith('.mscz')) {
-        continue;
-      }
-      const dest = `${ScoreLibrary.rootPath}/${n}`;
-      try {
-        const bytes: Uint8Array = await ctx.resourceManager.getRawFileContent(n);
-        const file = await fileIo.open(dest,
-          fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE | fileIo.OpenMode.TRUNC);
-        try {
-          await fileIo.write(file.fd, bytes.buffer);
-        } finally {
-          await fileIo.close(file.fd);
-        }
-        copied++;
-      } catch (e) {
-        console.info(`MSOH ScoreLibrary seed skip ${n}: ${JSON.stringify(e)}`);
-      }
-    }
-    return copied;
-  }
 }

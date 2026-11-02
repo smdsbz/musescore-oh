@@ -45,7 +45,6 @@ struct Index {
   @State loading: boolean = true;
   @State errorMsg: string = '';
   @State publicPath: string = '';
-  @State seeding: boolean = false;
   @State importing: boolean = false;
   /** 「打开方式」传入的文件 URI（EntryAbility 暂存，热启动时 @Watch 触发处理） */
   @StorageLink('msohPendingOpenUri') @Watch('onPendingOpenUri') pendingOpenUri: string = '';
@@ -172,22 +171,6 @@ struct Index {
       }
     } finally {
       this.importing = false;
-    }
-  }
-
-  /** 把内置示例曲谱复制进公共下载目录（rawfile 未打包样本时提示） */
-  private async seedSamples(): Promise<void> {
-    this.seeding = true;
-    try {
-      const n = await ScoreLibrary.seedBuiltinSamples();
-      if (n === 0) {
-        this.getUIContext().getPromptAction().showToast({ message: '没有可导入的内置示例', duration: 2000 });
-      } else {
-        this.getUIContext().getPromptAction().showToast({ message: `已导入 ${n} 份示例曲谱`, duration: 2000 });
-        await this.refresh();
-      }
-    } finally {
-      this.seeding = false;
     }
   }
 
@@ -345,19 +328,6 @@ struct Index {
       Text('放入文件后回到本应用，点右上角「刷新」；\n或直接点右上角「导入」，从文件管理器选择 .mscz 文件。')
         .fontSize(13)
         .fontColor($r('sys.color.font_tertiary'))
-
-      Button(this.seeding ? '正在导入…' : '导入内置示例曲谱')
-        .height(48)
-        .fontSize(16)
-        .fontColor(Color.White)
-        .backgroundColor($r('sys.color.brand'))
-        .borderRadius(24)
-        .padding({ left: 24, right: 24 })
-        .margin({ top: 12 })
-        .enabled(!this.seeding)
-        .onClick(() => {
-          this.seedSamples();
-        })
     }
     .width('100%')
     .padding({ left: 16, right: 16, bottom: 32 })
