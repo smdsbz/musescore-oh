@@ -480,15 +480,14 @@ export struct ScoreView {
             .justifyContent(FlexAlign.Center)
           } else {
             Scroll(this.scroller) {
-              Column({ space: 12 }) {
+              // 连续视图：native 已按 SYSTEM 布局输出整条乐谱的纵向分块图，0 间距无缝堆叠
+              Column() {
                 ForEach(this.pages, (item: PageItem) => {
                   Image(`file://${item.page.file}`)
                     .autoResize(true)
                     .objectFit(ImageFit.Contain)
                     .width('100%')
                     .aspectRatio(item.page.w / item.page.h)
-                    .borderRadius(6)
-                    .backgroundColor(Color.White)
                 }, (item: PageItem) => item.key)
               }
               .width('100%')

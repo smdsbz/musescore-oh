@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iomanip>
@@ -709,9 +710,13 @@ static napi_value EngineOpenScore(napi_env env, napi_callback_info info)
 
 // args: handle(int), viewIndex(int), outDir(string), dpi(number)
 // viewIndex < 0 renders the master score; >= 0 renders excerpts()[i].
-// Every page becomes outDir/p<idx>.png (dir created if missing).
+// LayoutMode::SYSTEM lays the whole score onto one never-ending page
+// (page breaks become line breaks), which we slice into vertical PNG
+// chunks of at most CHUNK_PX tall (keeps decode memory and GPU texture
+// size bounded for long scores). Output: outDir/p<idx>.png.
 static napi_value EngineRenderView(napi_env env, napi_callback_info info)
 {
+    static constexpr int CHUNK_PX = 2400;
     size_t argc = 4;
     napi_value argv[4] = { nullptr, nullptr, nullptr, nullptr };
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
@@ -759,24 +764,30 @@ static napi_value EngineRenderView(napi_env env, napi_callback_info info)
                 break;
             }
         }
-        if (view->pages().empty()) {
-            view->doLayout();
-        }
+        view->setLayoutMode(mu::engraving::LayoutMode::SYSTEM);
+        view->doLayout();
         if (view->pages().empty()) {
             o << "{\"ok\":false,\"error\":\"no pages after layout\"}";
             break;
         }
         QDir().mkpath(QString::fromStdString(outDir));
 
-        const mu::engraving::SizeF psize = mu::engraving::rendering::score::Paint::pageSizeInch(view);
-        const int rw = static_cast<int>(psize.width() * dpi);
-        const int rh = static_cast<int>(psize.height() * dpi);
+        const mu::engraving::Page* page = view->pages().front();
+        const mu::engraving::RectF pageRect = page->ldata()->bbox();
+        const double scale = dpi / mu::engraving::DPI;
+        const int rw = static_cast<int>(std::lrint(pageRect.width() * scale));
+        const int totalH = static_cast<int>(std::lrint(pageRect.height() * scale));
+        if (rw <= 0 || totalH <= 0) {
+            o << "{\"ok\":false,\"error\":\"degenerate page size " << rw << "x" << totalH << "\"}";
+            break;
+        }
 
         std::ostringstream pages;
         bool ok = true;
-        int n = static_cast<int>(view->pages().size());
-        for (int i = 0; i < n && ok; ++i) {
-            QImage image(rw, rh, QImage::Format_ARGB32_Premultiplied);
+        int n = 0;
+        for (int y0 = 0; y0 < totalH && ok; y0 += CHUNK_PX, ++n) {
+            const int ch = std::min(CHUNK_PX, totalH - y0);
+            QImage image(rw, ch, QImage::Format_ARGB32_Premultiplied);
             image.setDotsPerMeterX(static_cast<int>((dpi * 1000) / mu::engraving::INCH));
             image.setDotsPerMeterY(static_cast<int>((dpi * 1000) / mu::engraving::INCH));
             image.fill(Qt::white);
@@ -786,21 +797,28 @@ static napi_value EngineRenderView(napi_env env, napi_callback_info info)
                 opt.deviceDpi = static_cast<int>(dpi);
                 opt.printPageBackground = false;
                 opt.isPrinting = true;
-                opt.fromPage = i;
-                opt.toPage = i;
+                opt.fromPage = 0;
+                opt.toPage = 0;
+                const double y0u = static_cast<double>(y0) / scale;
+                const double chu = static_cast<double>(ch) / scale;
+                opt.frameRect = mu::engraving::RectF(0.0, y0u, pageRect.width(), chu);
+                opt.onPaintPageSheet = [y0u](muse::draw::Painter* p, const mu::engraving::Page*,
+                                              const mu::engraving::RectF&) {
+                    p->translate(0.0, -y0u);
+                };
                 mu::engraving::rendering::score::Paint::paintScore(&painter, view, opt);
             }
-            const std::string file = outDir + "/p" + std::to_string(i) + ".png";
+            const std::string file = outDir + "/p" + std::to_string(n) + ".png";
             QFile out(QString::fromStdString(file));
             if (!(out.open(QIODevice::WriteOnly) && image.save(&out, "png"))) {
-                o << "{\"ok\":false,\"error\":\"write failed at page " << i << "\"";
+                o << "{\"ok\":false,\"error\":\"write failed at chunk " << n << "\"";
                 ok = false;
                 break;
             }
-            if (i > 0) {
+            if (n > 0) {
                 pages << ",";
             }
-            pages << "{\"file\":\"" << file << "\",\"w\":" << rw << ",\"h\":" << rh << "}";
+            pages << "{\"file\":\"" << file << "\",\"w\":" << rw << ",\"h\":" << ch << "}";
         }
         if (ok) {
             const auto t1 = std::chrono::steady_clock::now();
