@@ -846,6 +846,11 @@ static int IntervalIndexForSemitones(int chromatic)
     for (int i = 0; i < static_cast<int>(mu::engraving::Interval::allIntervals.size()); ++i) {
         const auto& iv = mu::engraving::Interval::allIntervals[i];
         if (iv.chromatic == chromatic && iv.diatonic < bestDia) {
+            // 增一度(diatonic 0)仅服务于纯同音类；非八度倍数时取自然音级（+1→小二度），
+            // 否则调号可折回 Db 但音符仍按升号系拼写
+            if (iv.diatonic == 0 && chromatic % 12 != 0) {
+                continue;
+            }
             best = i;
             bestDia = iv.diatonic;
         }
@@ -907,6 +912,9 @@ static napi_value EngineTransposeView(napi_env env, napi_callback_info info)
         const mu::engraving::TransposeDirection dir = semitones > 0
             ? mu::engraving::TransposeDirection::UP
             : mu::engraving::TransposeDirection::DOWN;
+        // 调号写法策略：文件未声明 <preferSharpFlat> 时 Part 保持构造默认 AUTO（clampKey
+        // [-6,6] 折回=正统写法，≤6 升降号，7#/7b 取符号更少的等音调）；文件显式声明
+        // （含 NONE/SHARPS/FLATS）一律照办——属性 IO 只在有标签时 setProperty。
         view->cmdSelectAll();
         bool ok = false;
         view->transactionManager()->transaction(

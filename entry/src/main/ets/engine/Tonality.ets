@@ -10,8 +10,10 @@ export const KEY_TONALITIES: string[] = [
 
 /**
  * 移调后的 fifths：k 满足 7k≡semitones (mod 12)，再按引擎 clampKey 同款
- * 升降号偏好折回（prefer：0=NONE→[-7,7]，1=SHARPS→[-4,7]，2=FLATS→[-7,4]，3=AUTO→[-6,6]；
- * 真值来源 pitchspelling.cpp clampKey + types.h Key 枚举 C_B=-7…C_S=7）
+ * 升降号偏好折回（真值来源 pitchspelling.cpp clampKey + types.h Key 枚举 C_B=-7…C_S=7：
+ * 0=NONE→[-7,7]，1=SHARPS→[-4,7]，2=FLATS→[-7,4]，3=AUTO→[-6,6]）。
+ * 文件未声明 <preferSharpFlat> 时 Part 默认 AUTO=正统写法（≤6 升降号，C#M→DbM、CbM→BM）；
+ * 显式声明（含 NONE）照文件，meta 的 prefer 字段如实透传。
  */
 export function transposedKeySigOf(base: number, semitones: number, prefer: number): number {
   if (semitones === 0) {

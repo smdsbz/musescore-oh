@@ -159,6 +159,11 @@ export default function engineTest() {
       const oct = await ScoreEngine.transposeView(h3.meta!.handle, -1, 14);
       expect(oct.ok).assertTrue();
       expect(oct.keySig).assertEqual(2);
+      // +1 → DbM(-5)：正统调号统一（桥侧 NONE→AUTO）的引擎级锚；顺带覆盖原 ±1 盲区
+      const h4 = await ScoreEngine.open(S.ma(), S.ctx!.cacheDir);
+      const aug = await ScoreEngine.transposeView(h4.meta!.handle, -1, 1);
+      expect(aug.ok).assertTrue();
+      expect(aug.keySig).assertEqual(-5);
       // 移调后同 handle 重渲仍 ok
       const r = await ScoreEngine.renderView(h1.meta!.handle, -1, `${S.ctx!.cacheDir}/render/zz_test_e2a`, 72);
       expect(r.ok).assertTrue();

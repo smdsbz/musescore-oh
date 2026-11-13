@@ -357,6 +357,12 @@ if(NOT EXISTS "${_pm}")
         "#if !defined(NO_QT_SUPPORT) && !defined(MUSE_NO_QML_CONTEXT)\n    globalIoc()->registerExport<api::IApiRegister>(moduleName(), new api::ApiRegister());\n#endif")
     file(WRITE "${_pm}" "ok")
 endif()
+# 8b. transpose.cpp:246 transposeKey(oKey, interval) 不传 prefer（默认 NONE→[-7,7] 不折回，
+# 会写出 C#M/CbM 7 升/7 降）。改为读部件 prefer——Part 默认 AUTO([-6,6]) 即正统调号写法
+# （≤6 升降号，7#/7b 取符号更少的等音调）。幂等补丁放在 .msoh-patched 门闩外以便已建环境补打。
+msoh_patch("${MS_DIR}/src/engraving/editing/transpose.cpp"
+    "Key nKey = transposeKey(oKey, interval);"
+    "Key nKey = transposeKey(oKey, interval, ks->part()->preferSharpFlat());")
 msoh_write_build_vars()
 file(LOCK "${MSOH_LOCK}" RELEASE) # ── setup lock released ──
 
