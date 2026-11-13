@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
+import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 
 export interface ScoreFileEntry {
   fileName: string;
@@ -9,11 +10,25 @@ export interface ScoreFileEntry {
   mtime: number;
 }
 
-export interface ImportResult {
-  copied: number;
-  /** 源就在公共下载目录本应用子目录内（无需复制）的份数 */
-  alreadyInLibrary: number;
+export enum ImportStatus {
+  /** 目标不存在（或用户确认覆盖后）已复制入库 */
+  Copied,
+  /** 同名同内容（size+MD5 相同），未复制 */
+  Identical,
+  /** 源文件本身就在库目录内 */
+  InLibrary,
+  /** 同名且内容不同，UI 层未确认覆盖 */
+  Declined,
+  Error
 }
+
+export interface ImportOneResult {
+  fileName: string;
+  status: ImportStatus;
+}
+
+/** 同名且内容不同时，由 UI 层弹确认框决定是否覆盖库内文件 */
+export type OverwriteConfirm = (fileName: string) => Promise<boolean>;
 
 /**
  * 公共下载目录数据源：Download/<bundleName>/。
@@ -95,58 +110,83 @@ export class ScoreLibrary {
   static async readBytes(fileName: string): Promise<Uint8Array> {
     const file = await fileIo.open(`${ScoreLibrary.rootPath}/${fileName}`, fileIo.OpenMode.READ_ONLY);
     try {
-      const st = await fileIo.stat(file.fd);
-      const buf = new ArrayBuffer(st.size);
-      const view = new Uint8Array(buf);
-      let got = 0;
-      while (got < st.size) {
-        const n = await fileIo.read(file.fd, buf, { offset: got, length: st.size - got });
-        if (n <= 0) {
-          break;
-        }
-        got += n;
-      }
-      return got === st.size ? view : view.subarray(0, got);
+      return await ScoreLibrary.readAllFromFd(file.fd);
     } finally {
       await fileIo.close(file.fd);
     }
   }
 
-  /**
-   * 把文件选择器返回的 URI 复制进公共下载目录（同名覆盖，已在库内的跳过）。
-   */
-  static async importFromUris(uris: string[]): Promise<ImportResult> {
-    const res: ImportResult = { copied: 0, alreadyInLibrary: 0 };
-    if (ScoreLibrary.rootPath === '') {
-      return res;
-    }
-    if (!await ScoreLibrary.ensureDir()) {
-      return res;
-    }
-    for (const uri of uris) {
-      let name = '';
-      try {
-        const srcPath = new fileUri.FileUri(uri).path ?? '';
-        name = srcPath.split('/').pop() ?? '';
-        if (name === '' || !name.toLowerCase().endsWith('.mscz')) {
-          continue;
-        }
-        if (srcPath.startsWith(`${ScoreLibrary.rootPath}/`)) {
-          res.alreadyInLibrary++;
-          continue;
-        }
-        const src = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
-        try {
-          await fileIo.copyFile(src.fd, `${ScoreLibrary.rootPath}/${name}`);
-        } finally {
-          await fileIo.close(src.fd);
-        }
-        res.copied++;
-      } catch (e) {
-        console.info(`MSOH ScoreLibrary import skip ${name}: ${JSON.stringify(e)}`);
+  private static async readAllFromFd(fd: number): Promise<Uint8Array> {
+    const st = await fileIo.stat(fd);
+    const buf = new ArrayBuffer(st.size);
+    const view = new Uint8Array(buf);
+    let got = 0;
+    while (got < st.size) {
+      const n = await fileIo.read(fd, buf, { offset: got, length: st.size - got });
+      if (n <= 0) {
+        break;
       }
+      got += n;
     }
-    return res;
+    return got === st.size ? view : view.subarray(0, got);
+  }
+
+  private static async md5Hex(data: Uint8Array): Promise<string> {
+    const md = cryptoFramework.createMd('MD5');
+    const blob: cryptoFramework.DataBlob = { data: data };
+    await md.update(blob);
+    const out = await md.digest();
+    let hex = '';
+    for (let i = 0; i < out.data.length; i++) {
+      hex += out.data[i] < 16 ? '0' : '';
+      hex += out.data[i].toString(16);
+    }
+    return hex;
+  }
+
+  /**
+   * 把文件选择器返回的 URI 复制进公共下载目录。
+   * 同名且内容相同（size+MD5）则跳过复制；同名且内容不同时经 shouldOverwrite 询问，未确认则不覆盖。
+   */
+  static async importOne(uri: string, shouldOverwrite?: OverwriteConfirm): Promise<ImportOneResult> {
+    if (ScoreLibrary.rootPath === '' || !await ScoreLibrary.ensureDir()) {
+      return { fileName: '', status: ImportStatus.Error };
+    }
+    let name = '';
+    try {
+      const srcPath = new fileUri.FileUri(uri).path ?? '';
+      name = srcPath.split('/').pop() ?? '';
+      if (name === '' || !name.toLowerCase().endsWith('.mscz')) {
+        return { fileName: name, status: ImportStatus.Error };
+      }
+      if (srcPath.startsWith(`${ScoreLibrary.rootPath}/`)) {
+        return { fileName: name, status: ImportStatus.InLibrary };
+      }
+      const dest = `${ScoreLibrary.rootPath}/${name}`;
+      const src = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
+      try {
+        if (!await fileIo.access(dest)) {
+          await fileIo.copyFile(src.fd, dest);
+          return { fileName: name, status: ImportStatus.Copied };
+        }
+        const sameSize = (await fileIo.stat(src.fd)).size === (await fileIo.stat(dest)).size;
+        if (sameSize &&
+          await ScoreLibrary.md5Hex(await ScoreLibrary.readAllFromFd(src.fd)) ===
+          await ScoreLibrary.md5Hex(await ScoreLibrary.readBytes(name))) {
+          return { fileName: name, status: ImportStatus.Identical };
+        }
+        if (shouldOverwrite !== undefined && await shouldOverwrite(name)) {
+          await fileIo.copyFile(src.fd, dest);
+          return { fileName: name, status: ImportStatus.Copied };
+        }
+        return { fileName: name, status: ImportStatus.Declined };
+      } finally {
+        await fileIo.close(src.fd);
+      }
+    } catch (e) {
+      console.info(`MSOH ScoreLibrary import skip ${name}: ${JSON.stringify(e)}`);
+      return { fileName: name, status: ImportStatus.Error };
+    }
   }
 
 }

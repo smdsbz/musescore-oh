@@ -8,7 +8,7 @@ import {
 } from '@kit.UIDesignKit';
 import { LengthMetrics } from '@kit.ArkUI';
 import { engineInfo, engineSetup } from 'libmsohengine.so';
-import { ScoreLibrary, ScoreFileEntry } from '../data/ScoreLibrary';
+import { ScoreLibrary, ScoreFileEntry, ImportStatus } from '../data/ScoreLibrary';
 import { ScoreView, ScoreViewParams } from './ScoreView';
 
 const TAG = 'Index';
@@ -87,7 +87,7 @@ struct Index {
     this.consumePendingOpenUri();
   }
 
-  /** 处理「打开方式」传入的文件：复制进曲谱库（已在库内则免复制）后直接打开 */
+  /** 处理「打开方式」传入的文件：复制进曲谱库（相同/已在库内免复制，冲突问询）后直接打开 */
   private async consumePendingOpenUri(): Promise<void> {
     const uri = this.pendingOpenUri;
     if (uri.length === 0) {
@@ -100,16 +100,20 @@ struct Index {
       this.getUIContext().getPromptAction().showToast({ message: '仅支持打开 .mscz 曲谱文件', duration: 2000 });
       return;
     }
-    const r = await ScoreLibrary.importFromUris([uri]);
-    if (r.copied === 0 && r.alreadyInLibrary === 0) {
+    const r = await ScoreLibrary.importOne(uri, (n: string): Promise<boolean> => this.confirmOverwrite(n));
+    if (r.status === ImportStatus.Error) {
       this.getUIContext().getPromptAction().showToast({ message: '打开曲谱文件失败', duration: 2000 });
       return;
     }
-    if (r.copied > 0) {
+    if (r.status === ImportStatus.Declined) {
+      this.getUIContext().getPromptAction().showToast({ message: '已保留曲谱库内版本', duration: 2000 });
+      return;
+    }
+    if (r.status === ImportStatus.Copied) {
       this.getUIContext().getPromptAction().showToast({ message: '已导入曲谱库', duration: 2000 });
       await this.refresh();
     }
-    const params: ScoreViewParams = { fileName };
+    const params: ScoreViewParams = { fileName: r.fileName };
     this.pathStack.pushPathByName('ScoreView', params);
   }
 
@@ -138,7 +142,28 @@ struct Index {
     this.pathStack.pushPathByName('ScoreView', params);
   }
 
-  /** 文件选择器导入：复制进公共下载目录后刷新列表（用户取消选择器则静默返回） */
+  /** 同名且内容不同时的覆盖确认（系统 AlertDialog；取消/覆盖/遮罩与返回键都会 settle） */
+  private confirmOverwrite(fileName: string): Promise<boolean> {
+    return new Promise<boolean>((resolve: (v: boolean) => void) => {
+      this.getUIContext().showAlertDialog({
+        title: '同名曲谱已存在',
+        message: `「${fileName.replace(/\.mscz$/i, '')}」与曲谱库内的同名文件内容不同，是否覆盖？`,
+        autoCancel: true,
+        cancel: (): void => resolve(false),
+        primaryButton: {
+          value: '取消',
+          action: (): void => resolve(false)
+        },
+        secondaryButton: {
+          value: '覆盖',
+          fontColor: $r('app.color.error'),
+          action: (): void => resolve(true)
+        }
+      } as AlertDialogParamWithButtons);
+    });
+  }
+
+  /** 文件选择器导入：逐份复制进公共下载目录，同名冲突询问是否覆盖（用户取消选择器则静默返回） */
   private async pickAndImport(): Promise<void> {
     if (this.importing) {
       return;
@@ -160,14 +185,39 @@ struct Index {
     }
     this.importing = true;
     try {
-      const r = await ScoreLibrary.importFromUris(uris);
-      if (r.copied > 0) {
-        this.getUIContext().getPromptAction().showToast({ message: `已导入 ${r.copied} 份曲谱`, duration: 2000 });
-        await this.refresh();
-      } else if (r.alreadyInLibrary > 0) {
-        this.getUIContext().getPromptAction().showToast({ message: '所选曲谱已在曲谱库内', duration: 2000 });
+      let copied = 0;
+      let same = 0;
+      let declined = 0;
+      let openName = '';
+      for (const uri of uris) {
+        const r = await ScoreLibrary.importOne(uri, (n: string): Promise<boolean> => this.confirmOverwrite(n));
+        if (r.status === ImportStatus.Copied) {
+          copied++;
+        } else if (r.status === ImportStatus.Identical || r.status === ImportStatus.InLibrary) {
+          same++;
+          openName = r.fileName;
+        } else if (r.status === ImportStatus.Declined) {
+          declined++;
+        }
+      }
+      const prompt = this.getUIContext().getPromptAction();
+      if (copied > 0 && declined > 0) {
+        prompt.showToast({ message: `已导入 ${copied} 份，跳过 ${declined} 份同名曲谱`, duration: 2000 });
+      } else if (copied > 0) {
+        prompt.showToast({ message: `已导入 ${copied} 份曲谱`, duration: 2000 });
+      } else if (declined > 0) {
+        prompt.showToast({ message: `已跳过 ${declined} 份同名曲谱`, duration: 2000 });
+      } else if (same > 0) {
+        prompt.showToast({ message: '所选曲谱已在曲谱库内', duration: 2000 });
       } else {
-        this.getUIContext().getPromptAction().showToast({ message: '未能导入所选文件', duration: 2000 });
+        prompt.showToast({ message: '未能导入所选文件', duration: 2000 });
+      }
+      if (copied > 0) {
+        await this.refresh();
+      }
+      if (uris.length === 1 && openName.length > 0) {
+        const params: ScoreViewParams = { fileName: openName };
+        this.pathStack.pushPathByName('ScoreView', params);
       }
     } finally {
       this.importing = false;
@@ -221,7 +271,8 @@ struct Index {
                       this.openScore(item);
                     }
                   })
-                }, (item: ScoreItem) => item.key)
+                // key 含 mtime/size：同名覆盖后行内容变了，HdsListItemCard 不响应参数更新，须换 key 强制重建
+                }, (item: ScoreItem) => `${item.key}:${item.entry.mtime}:${item.entry.sizeBytes}`)
               }
             }
             .width('100%')
