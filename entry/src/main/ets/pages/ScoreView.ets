@@ -7,6 +7,7 @@ import {
 import { LengthMetrics, ComponentContent } from '@kit.ArkUI';
 import { ScoreLibrary } from '../data/ScoreLibrary';
 import { ScoreEngine, ScoreMetaInfo, RenderedPageInfo } from '../engine/ScoreEngine';
+import { KEY_TONALITIES, transposedKeySigOf } from '../engine/Tonality';
 
 const TAG = 'ScoreView';
 /** 渲染 DPI：150dpi 下 A4 ≈ 1240x1754px，屏显清晰且单页解码内存可控 */
@@ -15,32 +16,6 @@ const RENDER_DPI: number = 150;
 const TITLE_INSET_LOCAL: number = 108;
 /** openMenu 锚点 id：标题栏右下角的隐形锚点，菜单从其下方展开 */
 const MENU_ANCHOR_ID: string = 'partMenuAnchor';
-/** 调号→调性文本（大调/关系小调），下标 = 升降数 + 7 */
-const KEY_TONALITIES: string[] = [
-  'CbM/Abm', 'GbM/Ebm', 'DbM/Bbm', 'AbM/Fm', 'EbM/Cm', 'BbM/Gm', 'FM/Dm', 'CM/Am',
-  'GM/Em', 'DM/Bm', 'AM/F#m', 'EM/C#m', 'BM/G#m', 'F#M/D#m', 'C#M/A#m'
-];
-
-/**
- * 移调后的 fifths：k 满足 7k≡semitones (mod 12)，再按引擎 clampKey 同款
- * 升降号偏好折回（prefer：0/3=NONE/AUTO→[-6,6]，1=SHARPS→[-4,7]，2=FLATS→[-7,4]）
- */
-export function transposedKeySigOf(base: number, semitones: number, prefer: number): number {
-  if (semitones === 0) {
-    return base;
-  }
-  const k = (((semitones % 12) + 12) % 12) * 7 % 12;
-  let f = base + k;
-  const smallest = prefer === 1 ? -4 : -7;
-  const largest = prefer === 2 ? 4 : (prefer === 1 ? 7 : 6);
-  while (f < smallest) {
-    f += 12;
-  }
-  while (f > largest) {
-    f -= 12;
-  }
-  return f;
-}
 
 @CustomDialog
 struct TransposeDialog {

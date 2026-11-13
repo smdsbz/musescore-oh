@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from '@ohos/hypium';
 import { abilityDelegatorRegistry } from '@kit.TestKit';
 import { fileUri } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
-import { ScoreLibrary, ImportStatus, ImportOneResult } from '../../../main/ets/data/ScoreLibrary';
-import { writeBytes, readAll, rmIfExists, bytesEqual, flipMid } from './util/Helpers';
+import { ScoreLibrary, ImportStatus, ImportOneResult, ScoreFileEntry } from '../../../main/ets/data/ScoreLibrary';
+import { writeBytes, readAll, rmIfExists, bytesEqual, flipMid, sleep } from './util/Helpers';
 
 /**
  * I1 哈希喂数端到端（直调 importOne）：
@@ -39,6 +39,8 @@ export default function importTest() {
     afterAll(async (): Promise<void> => {
       await rmIfExists(S.cache);
       await rmIfExists(`${S.rootPath}/${FILE}`);
+      await rmIfExists(`${S.rootPath}/zz_test_order_old.mscz`);
+      await rmIfExists(`${S.rootPath}/zz_test_order_new.mscz`);
     });
 
     it('i1_hashPipeline', 0, async (done: Function) => {
@@ -67,6 +69,22 @@ export default function importTest() {
       });
       expect(r.status).assertEqual(ImportStatus.Identical);
       expect(spy).assertEqual(0);
+      done();
+    });
+
+    /** L1：列表按 mtime 倒序（最新在前）——杀 sort 比较器方向反转 */
+    it('i2_listScoresNewestFirst', 0, async (done: Function) => {
+      await rmIfExists(`${S.rootPath}/zz_test_order_old.mscz`);
+      await rmIfExists(`${S.rootPath}/zz_test_order_new.mscz`);
+      await writeBytes(`${S.rootPath}/zz_test_order_old.mscz`, S.pristine);
+      await sleep(1200); // mtime 秒级分辨率，跨秒才能区分
+      await writeBytes(`${S.rootPath}/zz_test_order_new.mscz`, flipMid(S.pristine));
+      const list: ScoreFileEntry[] = await ScoreLibrary.listScores();
+      const names: string[] = list.map((e: ScoreFileEntry): string => e.fileName);
+      const iOld = names.indexOf('zz_test_order_old.mscz');
+      const iNew = names.indexOf('zz_test_order_new.mscz');
+      expect(iOld >= 0 && iNew >= 0).assertTrue();
+      expect(iNew < iOld).assertTrue();
       done();
     });
   });

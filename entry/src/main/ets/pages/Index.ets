@@ -1,13 +1,11 @@
 import { common } from '@kit.AbilityKit';
 import { picker, fileUri } from '@kit.CoreFileKit';
-import bundleManager from '@ohos.bundle.bundleManager';
-import deviceInfo from '@ohos.deviceInfo';
 import {
   HdsNavigation, HdsNavigationTitleMode, TextStyleMode, HdsListItemCard, SuffixArrow,
   ScrollEffectType, BlurStrategy, hdsMaterial
 } from '@kit.UIDesignKit';
 import { LengthMetrics } from '@kit.ArkUI';
-import { engineInfo, engineSetup } from 'libmsohengine.so';
+import { ScoreEngine } from '../engine/ScoreEngine';
 import { ScoreLibrary, ScoreFileEntry, ImportStatus } from '../data/ScoreLibrary';
 import { ScoreView, ScoreViewParams } from './ScoreView';
 
@@ -54,31 +52,8 @@ struct Index {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     ScoreLibrary.init(ctx);
     this.publicPath = ScoreLibrary.getDisplayRoot();
-    try {
-      // 引擎无头环境初始化：必须在主 JS 线程（详见 mscore_engine.cpp EngineSetup）
-      console.info(`MSOH engine: ${engineInfo()}`);
-      engineSetup({
-          'bundle.bundleManager': {
-            'BundleFlag': bundleManager.BundleFlag,
-            'getBundleInfoForSelfSync': bundleManager.getBundleInfoForSelfSync
-          },
-          'deviceInfo': {
-            'deviceType': deviceInfo.deviceType,
-            'marketName': deviceInfo.marketName,
-            'productModel': deviceInfo.productModel,
-            'osFullName': deviceInfo.osFullName,
-            'brand': deviceInfo.brand,
-            'manufacture': deviceInfo.manufacture,
-            'sdkApiVersion': deviceInfo.sdkApiVersion,
-            'displayVersion': deviceInfo.displayVersion,
-            'majorVersion': deviceInfo.majorVersion,
-            'seniorVersion': deviceInfo.seniorVersion,
-            'featureVersion': deviceInfo.featureVersion
-          }
-        }, ctx.cacheDir);
-      } catch (e) {
-        console.info(`MSOH engine setup failed: ${JSON.stringify(e)}`);
-      }
+    // 引擎无头环境初始化（必须在主 JS 线程，内部幂等）
+    ScoreEngine.setup(ctx);
     this.refresh();
     this.consumePendingOpenUri();
   }

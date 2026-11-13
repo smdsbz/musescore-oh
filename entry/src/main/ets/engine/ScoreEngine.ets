@@ -1,5 +1,8 @@
 import { taskpool } from '@kit.ArkTS';
-import { engineOpenScore, engineRenderView, engineTransposeView } from 'libmsohengine.so';
+import { common } from '@kit.AbilityKit';
+import bundleManager from '@ohos.bundle.bundleManager';
+import deviceInfo from '@ohos.deviceInfo';
+import { engineInfo, engineSetup, engineOpenScore, engineRenderView, engineTransposeView } from 'libmsohengine.so';
 import { recStr, recNum } from './JsonRec';
 
 export interface PartInfo {
@@ -146,6 +149,38 @@ function transposeViewTask(handle: number, viewIndex: number, semitones: number)
  */
 export class ScoreEngine {
   private static chain: Promise<void> = Promise.resolve();
+
+  /**
+   * 无头引擎初始化：必须在主 JS 线程调用（详见 mscore_engine.cpp EngineSetup）。
+   * 幂等（C++ 侧 static 守卫），Index 与测试共用。
+   */
+  static setup(ctx: common.UIAbilityContext): boolean {
+    try {
+      console.info(`MSOH engine: ${engineInfo()}`);
+      return engineSetup({
+        'bundle.bundleManager': {
+          'BundleFlag': bundleManager.BundleFlag,
+          'getBundleInfoForSelfSync': bundleManager.getBundleInfoForSelfSync
+        },
+        'deviceInfo': {
+          'deviceType': deviceInfo.deviceType,
+          'marketName': deviceInfo.marketName,
+          'productModel': deviceInfo.productModel,
+          'osFullName': deviceInfo.osFullName,
+          'brand': deviceInfo.brand,
+          'manufacture': deviceInfo.manufacture,
+          'sdkApiVersion': deviceInfo.sdkApiVersion,
+          'displayVersion': deviceInfo.displayVersion,
+          'majorVersion': deviceInfo.majorVersion,
+          'seniorVersion': deviceInfo.seniorVersion,
+          'featureVersion': deviceInfo.featureVersion
+        }
+      }, ctx.cacheDir);
+    } catch (e) {
+      console.info(`MSOH engine setup failed: ${JSON.stringify(e)}`);
+      return false;
+    }
+  }
 
   private static run<T>(job: () => Promise<T>): Promise<T> {
     const next = ScoreEngine.chain.then(job, job);

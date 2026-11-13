@@ -144,5 +144,29 @@ export default function openWithTest() {
       expect(row).assertTrue();
       done();
     });
+
+    /**
+     * T1 移调端到端（marathon 单乐器，instruments===1 使总谱即有调性按钮）：
+     * 杀 partMenuItems 门控、openTransposeDialog 传参、applyTranspose 增量基准、标签接线。
+     * 盲区：outDir 的 t${transposeCount} 缓存击穿接线（标签断言杀不掉，图像断言跨设备脆弱不补）。
+     */
+    it('b4_transpose_endToEnd', 0, async (done: Function) => {
+      // b3 结束态：库内 FILE=marathon、cache=marathon → identical 直开
+      await openViaWant();
+      const opened = await waitFor(ON.text('Marathon', MatchPattern.CONTAINS), 15000);
+      expect(opened).assertTrue();
+      const tonality = await waitFor(ON.text('CM/Am'), 10000);
+      expect(tonality).assertTrue();
+      // titleBar 调性按钮点击（B 系首次点击 titleBar 元素，探针失败即红）
+      expect(await clickButton('CM/Am')).assertTrue();
+      const dlg = await waitFor(ON.text('初始调性'), 8000);
+      expect(dlg).assertTrue();
+      expect(await clickButton('+')).assertTrue();
+      expect(await clickButton('+')).assertTrue();
+      expect(await clickButton('确认')).assertTrue();
+      const after = await waitFor(ON.text('DM/Bm'), 30000);
+      expect(after).assertTrue();
+      done();
+    });
   });
 }
