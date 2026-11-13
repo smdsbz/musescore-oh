@@ -1,6 +1,9 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import { ImportStatus, planImport, isConflict } from './ImportPlan';
+
+export { ImportStatus } from './ImportPlan';
 
 export interface ScoreFileEntry {
   fileName: string;
@@ -8,18 +11,6 @@ export interface ScoreFileEntry {
   sizeBytes: number;
   /** 秒级时间戳（fileIo Stat.mtime） */
   mtime: number;
-}
-
-export enum ImportStatus {
-  /** 目标不存在（或用户确认覆盖后）已复制入库 */
-  Copied,
-  /** 同名同内容（size+MD5 相同），未复制 */
-  Identical,
-  /** 源文件本身就在库目录内 */
-  InLibrary,
-  /** 同名且内容不同，UI 层未确认覆盖 */
-  Declined,
-  Error
 }
 
 export interface ImportOneResult {
@@ -165,21 +156,26 @@ export class ScoreLibrary {
       const dest = `${ScoreLibrary.rootPath}/${name}`;
       const src = await fileIo.open(uri, fileIo.OpenMode.READ_ONLY);
       try {
-        if (!await fileIo.access(dest)) {
+        const destExists = await fileIo.access(dest);
+        let sameSize = false;
+        let sameHash = false;
+        if (destExists) {
+          sameSize = (await fileIo.stat(src.fd)).size === (await fileIo.stat(dest)).size;
+          if (sameSize) {
+            sameHash = await ScoreLibrary.md5Hex(await ScoreLibrary.readAllFromFd(src.fd)) ===
+              await ScoreLibrary.md5Hex(await ScoreLibrary.readBytes(name));
+          }
+        }
+        // 回调时机由决策函数派生：只有冲突才打扰 UI（相同文件绝不弹框）
+        let overwrite = false;
+        if (isConflict(destExists, sameSize, sameHash) && shouldOverwrite !== undefined) {
+          overwrite = await shouldOverwrite(name);
+        }
+        const status = planImport(destExists, sameSize, sameHash, shouldOverwrite !== undefined, overwrite);
+        if (status === ImportStatus.Copied) {
           await fileIo.copyFile(src.fd, dest);
-          return { fileName: name, status: ImportStatus.Copied };
         }
-        const sameSize = (await fileIo.stat(src.fd)).size === (await fileIo.stat(dest)).size;
-        if (sameSize &&
-          await ScoreLibrary.md5Hex(await ScoreLibrary.readAllFromFd(src.fd)) ===
-          await ScoreLibrary.md5Hex(await ScoreLibrary.readBytes(name))) {
-          return { fileName: name, status: ImportStatus.Identical };
-        }
-        if (shouldOverwrite !== undefined && await shouldOverwrite(name)) {
-          await fileIo.copyFile(src.fd, dest);
-          return { fileName: name, status: ImportStatus.Copied };
-        }
-        return { fileName: name, status: ImportStatus.Declined };
+        return { fileName: name, status: status };
       } finally {
         await fileIo.close(src.fd);
       }
